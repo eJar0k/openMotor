@@ -19,11 +19,31 @@ TRANSPORT_TAB_KEYS = (
 )
 TRANSPORT_UNSET = 0.0
 
+# v0.7.0 default igniter block seeded into motors that predate the igniter
+# concept (BPNV pyrogen + forward_plenum auto-sizing). -1.0 = "auto"
+# sentinel (backend derives mass via Sutton, throat via Kn-design, etc.).
+DEFAULT_IGNITER = {
+    'pyrogen': {
+        'name': 'BPNV', 'a': 2.0e-5, 'n': 0.50, 'rho': 1700.0,
+        'T_flame': 2800.0, 'M': 0.030, 'gamma': 1.25,
+        'impetus_W': 5000.0, 'heat_flux_cal_cm2_s': 69.4,
+        'kappa_jet': 8.0, 'form': 'pellets',
+        'particle_diameter_m': 3.2e-3, 'particle_LD_ratio': 1.0,
+        'heat_delivery_mode': 'demar', 'pellet_emissivity': 0.7,
+        'radiation_absorption_length_m': 1.0,
+    },
+    'mass': -1.0, 'throat_area': -1.0, 'volume': -1.0, 'burn_area': -1.0,
+    'burn_law': '0d', 'injection_topology': 'forward_plenum',
+    'cartridge_length_m': -1.0, 'basket_fill_fraction': 0.5,
+    'pellet_packing_fraction': 0.60,
+}
+
 class fileTypes(Enum):
     PREFERENCES = 1
     PROPELLANTS = 2
     MOTOR = 3
     RECENT_FILES = 4
+    IGNITERS = 5  # v0.7.0: reusable pyrogen-material library
 
 def futureVersion(verA, verB): # Returns true if a is newer than b
     major = verA[0] > verB[0]
@@ -82,7 +102,7 @@ def passthrough(data):
 # needs transport will refuse to run until real values are supplied.
 
 def _seedPropellantTransport(propellant):
-    propellant.setdefault('transportVariant', 'effective')
+    propellant.setdefault('transportVariant', 'frozen')
     for tab in propellant.get('tabs', []):
         for key in TRANSPORT_TAB_KEYS:
             tab.setdefault(key, TRANSPORT_UNSET)
@@ -95,6 +115,8 @@ def migrateProp_0_6_1_to_0_7_0(data):
 
 def migrateMotor_0_6_1_to_0_7_0(data):
     _seedPropellantTransport(data['propellant'])
+    # v0.7.0 also introduces the igniter block; seed a default if absent.
+    data.setdefault('igniter', DEFAULT_IGNITER)
     return data
 
 #0.6.0 to 0.6.1
@@ -205,7 +227,8 @@ migrations = {
         fileTypes.PREFERENCES: passthrough,
         fileTypes.PROPELLANTS: migrateProp_0_6_1_to_0_7_0,
         fileTypes.MOTOR: migrateMotor_0_6_1_to_0_7_0,
-        fileTypes.RECENT_FILES: passthrough
+        fileTypes.RECENT_FILES: passthrough,
+        fileTypes.IGNITERS: passthrough
     },
     (0, 6, 0): {
         'to': (0, 6, 1),
