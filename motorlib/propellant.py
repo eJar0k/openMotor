@@ -2,7 +2,7 @@
 
 from scipy.optimize import fsolve
 
-from .properties import PropertyCollection, FloatProperty, StringProperty, TabularProperty
+from .properties import PropertyCollection, FloatProperty, StringProperty, TabularProperty, EnumProperty
 from .simResult import SimAlert, SimAlertLevel, SimAlertType
 from .constants import gasConstant
 
@@ -17,6 +17,21 @@ class PropellantTab(PropertyCollection):
         self.props['k'] = FloatProperty('Specific Heat Ratio', '', 1+1e-6, 10)
         self.props['t'] = FloatProperty('Combustion Temperature', 'K', 1, 10000)
         self.props['m'] = FloatProperty('Exhaust Molar Mass', 'g/mol', 1e-6, 100)
+        # Combustion-gas transport properties (added v0.7.0 file format).
+        # Viscosity is a single value (invariant of the frozen/effective
+        # distinction — equilibrium chemistry shifts conductivity and
+        # specific heat, not dynamic viscosity), while conductivity and
+        # specific heat are stored for BOTH the chemically-frozen and the
+        # effective (reaction-shifting) sets so a downstream transient
+        # solver can pick via Propellant.transportVariant. The default 0.0
+        # is the "not provided" sentinel: a value <= 0 means transport was
+        # never supplied for this tab and a transport-consuming solver must
+        # refuse to run rather than fabricate a number.
+        self.props['mu'] = FloatProperty('Viscosity', 'Pa*s', 0, 1)
+        self.props['kThermalFrozen'] = FloatProperty('Frozen Conductivity', 'W/(m*K)', 0, 1000)
+        self.props['cpFrozen'] = FloatProperty('Frozen Specific Heat', 'J/(kg*K)', 0, 1e5)
+        self.props['kThermalEffective'] = FloatProperty('Effective Conductivity', 'W/(m*K)', 0, 1000)
+        self.props['cpEffective'] = FloatProperty('Effective Specific Heat', 'J/(kg*K)', 0, 1e5)
         if tabDict is not None:
             self.setProperties(tabDict)
 
@@ -27,6 +42,11 @@ class Propellant(PropertyCollection):
         super().__init__()
         self.props['name'] = StringProperty('Name')
         self.props['density'] = FloatProperty('Density', 'kg/m^3', 1, 10000)
+        # Which per-tab transport set a transient solver should use. Stored
+        # at the propellant level (not per-tab) since it is a modelling
+        # choice that applies uniformly across the pressure range.
+        self.props['transportVariant'] = EnumProperty('Transport Variant',
+                                                      ['frozen', 'effective'])
         self.props['tabs'] = TabularProperty('Properties', PropellantTab)
         if propDict is not None:
             self.setProperties(propDict)

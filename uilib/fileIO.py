@@ -8,8 +8,16 @@ import platformdirs
 from .defaults import DEFAULT_PREFERENCES, DEFAULT_PROPELLANTS, KNSU_PROPS
 from .logger import logger
 
-appVersion = (0, 6, 1)
+appVersion = (0, 7, 0)
 appVersionStr = '.'.join(map(str, appVersion))
+
+# Per-tab combustion-gas transport keys added in the 0.7.0 file format.
+# Default 0.0 is the "not provided" sentinel (see PropellantTab); a
+# transport-consuming solver refuses to run rather than fabricate values.
+TRANSPORT_TAB_KEYS = (
+    'mu', 'kThermalFrozen', 'cpFrozen', 'kThermalEffective', 'cpEffective',
+)
+TRANSPORT_UNSET = 0.0
 
 class fileTypes(Enum):
     PREFERENCES = 1
@@ -66,7 +74,29 @@ def getConfigPath():
 
 def passthrough(data):
     return data
-    
+
+# 0.6.1 to 0.7.0 — per-tab gas transport (frozen + effective) + the
+# propellant-level transport-variant selector. Old files have neither, so
+# every tab is seeded with the "not provided" sentinel (0.0) and the
+# propellant defaults to the 'effective' variant. A transient solver that
+# needs transport will refuse to run until real values are supplied.
+
+def _seedPropellantTransport(propellant):
+    propellant.setdefault('transportVariant', 'effective')
+    for tab in propellant.get('tabs', []):
+        for key in TRANSPORT_TAB_KEYS:
+            tab.setdefault(key, TRANSPORT_UNSET)
+    return propellant
+
+def migrateProp_0_6_1_to_0_7_0(data):
+    for propellant in data:
+        _seedPropellantTransport(propellant)
+    return data
+
+def migrateMotor_0_6_1_to_0_7_0(data):
+    _seedPropellantTransport(data['propellant'])
+    return data
+
 #0.6.0 to 0.6.1
 def migrateMotor_0_6_0_to_0_6_1(data):
     data['config']['maxMachNumber'] = DEFAULT_PREFERENCES['general']['maxMachNumber']
@@ -170,6 +200,13 @@ def migrateMotor_0_2_0_to_0_3_0(data):
     return data
 
 migrations = {
+    (0, 6, 1): {
+        'to': (0, 7, 0),
+        fileTypes.PREFERENCES: passthrough,
+        fileTypes.PROPELLANTS: migrateProp_0_6_1_to_0_7_0,
+        fileTypes.MOTOR: migrateMotor_0_6_1_to_0_7_0,
+        fileTypes.RECENT_FILES: passthrough
+    },
     (0, 6, 0): {
         'to': (0, 6, 1),
         fileTypes.PREFERENCES: passthrough,
