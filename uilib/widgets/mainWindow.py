@@ -1,10 +1,12 @@
 import sys
 from threading import Thread
 
-from PyQt6.QtWidgets import QMainWindow, QTableWidgetItem, QHeaderView
+from PyQt6.QtWidgets import QMainWindow, QTableWidgetItem, QHeaderView, QMenu
+from PyQt6.QtGui import QActionGroup
 from PyQt6.QtCore import Qt
 
 import motorlib
+from motorlib import solvers
 import uilib.widgets.aboutDialog
 from uilib.views.MainWindow_ui import Ui_MainWindow
 
@@ -100,9 +102,37 @@ class Window(QMainWindow):
 
         # Sim
         self.ui.actionRunSimulation.triggered.connect(self.runSimulation)
+        self.setupSolverMenu()
 
         # Help
         self.ui.actionAboutOpenMotor.triggered.connect(self.aboutDialog.show)
+
+    def setupSolverMenu(self):
+        """Build the active-solver picker submenu under the Simulate menu
+        (v0.8.0 D6). Lists every solver in the motorlib.solvers registry as a
+        mutually-exclusive checkable action; the built-in quasi-steady solver
+        is the default. Only shown when more than one solver is registered
+        (i.e. the srm_1d transient plugin was discovered)."""
+        names = solvers.list_solvers()
+        if len(names) < 2:
+            return  # No external solver discovered — keep the menu clean.
+
+        self.solverMenu = QMenu('Solver', self)
+        self.solverActionGroup = QActionGroup(self)
+        self.solverActionGroup.setExclusive(True)
+        active = self.app.simulationManager.activeSolverName
+        for name in names:
+            action = self.solverMenu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(name == active)
+            action.triggered.connect(
+                lambda _checked, n=name: self.selectSolver(n))
+            self.solverActionGroup.addAction(action)
+        self.ui.menuSimulate.addSeparator()
+        self.ui.menuSimulate.addMenu(self.solverMenu)
+
+    def selectSolver(self, name):
+        self.app.simulationManager.setActiveSolver(name)
 
     def setupPropSelector(self):
         self.ui.pushButtonPropEditor.pressed.connect(self.app.propellantManager.showMenu)

@@ -9,6 +9,7 @@ from .constants import atmosphericPressure, gasConstant
 from .grains import EndBurningGrain, grainTypes
 from .nozzle import Nozzle
 from .propellant import Propellant
+from .igniter import Igniter, Pyrogen
 from .properties import FloatProperty, IntProperty, PropertyCollection
 from .simResult import SimAlert, SimAlertLevel, SimAlertType, SimulationResult
 from .grain import Grain
@@ -64,6 +65,13 @@ class Motor:
         self.propellant = None
         self.nozzle = Nozzle()
         self.config = MotorConfig()
+        # v0.8.0: the motor carries its igniter the same way it carries its
+        # propellant — a per-motor chamber sizing (``Igniter``) plus an
+        # embedded reusable pyrogen material (``Pyrogen``). Serialized under
+        # ``data.igniter`` (chamber fields + a nested ``pyrogen`` block) so it
+        # round-trips through the GUI and reaches srm_1d's transient solver.
+        self.igniter = Igniter()
+        self.igniterPyrogen = Pyrogen()
 
         if propDict is not None:
             self.applyDict(propDict)
@@ -84,6 +92,10 @@ class Motor:
             for grain in self.grains
         ]
         motorData["config"] = self.config.getProperties()
+        # Igniter block: chamber sizing fields + the embedded pyrogen material.
+        igniterData = self.igniter.getProperties()
+        igniterData["pyrogen"] = self.igniterPyrogen.getProperties()
+        motorData["igniter"] = igniterData
         return motorData
 
     def applyDict(self, dictionary):
@@ -99,6 +111,16 @@ class Motor:
             self.grains.append(grainTypes[entry["type"]]())
             self.grains[-1].setProperties(entry["properties"])
         self.config.setProperties(dictionary["config"])
+        # Igniter is optional for backward compatibility — pre-0.7.0 files
+        # (and dicts that predate the block) leave the defaults in place. The
+        # nested ``pyrogen`` material applies to ``igniterPyrogen``; the
+        # remaining chamber-sizing keys apply to ``igniter``.
+        igniterData = dictionary.get("igniter")
+        if igniterData is not None:
+            pyrogenData = igniterData.get("pyrogen")
+            if pyrogenData is not None:
+                self.igniterPyrogen.setProperties(pyrogenData)
+            self.igniter.setProperties(igniterData)
 
     def calcBurningSurfaceArea(self, regDepth):
         burnoutThres = self.config.getProperty("burnoutWebThres")

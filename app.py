@@ -8,7 +8,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt
 
 import motorlib
-from motorlib import simResult
+from motorlib import simResult, solvers
 from uilib import preferencesManager, propellantManager, simulationManager, fileManager, toolManager
 from uilib import importExportManager
 import uilib.widgets.mainWindow
@@ -36,6 +36,10 @@ class App(QApplication):
 
         self.simulationManager = uilib.simulationManager.SimulationManager()
         self.preferencesManager.preferencesChanged.connect(self.simulationManager.setPreferences)
+        # v0.8.0 (D1/D6): discover external solver plugins (srm_1d transient)
+        # so they appear in the registry / solver picker. Best-effort — the
+        # app runs with only the built-in quasi-steady solver if absent.
+        solvers.discover_external_solvers()
 
         self.fileManager = uilib.fileManager.FileManager(self)
         startupFileLoaded = False
