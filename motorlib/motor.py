@@ -72,6 +72,11 @@ class Motor:
         # round-trips through the GUI and reaches srm_1d's transient solver.
         self.igniter = Igniter()
         self.igniterPyrogen = Pyrogen()
+        # v0.8.0: per-motor solver run-config overrides, keyed by solver name
+        # (plain value dicts; the schema is owned by the solver plugin). Empty
+        # = use the global Preferences config. The quasi-steady solver uses
+        # `config`, so it has no entry here.
+        self.solverConfigs = {}
 
         if propDict is not None:
             self.applyDict(propDict)
@@ -96,6 +101,8 @@ class Motor:
         igniterData = self.igniter.getProperties()
         igniterData["pyrogen"] = self.igniterPyrogen.getProperties()
         motorData["igniter"] = igniterData
+        # Per-motor solver run-config overrides (empty = use global Preferences).
+        motorData["solverConfigs"] = self.solverConfigs
         return motorData
 
     def applyDict(self, dictionary):
@@ -121,6 +128,8 @@ class Motor:
             if pyrogenData is not None:
                 self.igniterPyrogen.setProperties(pyrogenData)
             self.igniter.setProperties(igniterData)
+        # Per-motor solver run-config overrides (optional; empty if absent).
+        self.solverConfigs = dictionary.get("solverConfigs", {})
 
     def calcBurningSurfaceArea(self, regDepth):
         burnoutThres = self.config.getProperty("burnoutWebThres")

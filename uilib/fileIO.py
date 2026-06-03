@@ -117,6 +117,8 @@ def migrateMotor_0_6_1_to_0_7_0(data):
     _seedPropellantTransport(data['propellant'])
     # v0.7.0 also introduces the igniter block; seed a default if absent.
     data.setdefault('igniter', DEFAULT_IGNITER)
+    # v0.8.0 per-motor solver run-config overrides (empty = use global config).
+    data.setdefault('solverConfigs', {})
     return data
 
 #0.6.0 to 0.6.1

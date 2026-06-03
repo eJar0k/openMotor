@@ -74,8 +74,21 @@ class Window(QMainWindow):
         self.ui.motorEditor.setPreferences(self.app.preferencesManager.preferences)
         self.ui.pushButtonEditGrain.pressed.connect(self.editGrain)
         self.ui.motorEditor.changeApplied.connect(self.applyChange)
+        # Per-motor solver-aware config (grain-table 'Config' row).
+        self.ui.motorEditor.motorConfigApplied.connect(self.applyMotorConfig)
+        self.ui.motorEditor.activeSolverChanged.connect(
+            self.app.preferencesManager.setActiveSolver)
+        self.app.preferencesManager.activeSolverChanged.connect(
+            self.ui.motorEditor.setActiveSolver)
         # Enables only buttons for actions possible given the selected grain
         self.ui.motorEditor.closed.connect(self.checkGrainSelection)
+
+    def applyMotorConfig(self, general, solverConfigs):
+        cm = self.app.fileManager.getCurrentMotor()
+        cm.config.setProperties(general)
+        cm.solverConfigs = solverConfigs
+        self.app.fileManager.addNewMotorHistory(cm)
+        self.updateGrainTable()
 
     def setupGrainAddition(self):
         self.ui.comboBoxGrainGeometry.addItems(motorlib.grains.grainTypes.keys())
@@ -112,7 +125,8 @@ class Window(QMainWindow):
         (v0.8.0 D6). Lists every solver in the motorlib.solvers registry as a
         mutually-exclusive checkable action; the built-in quasi-steady solver
         is the default. Only shown when more than one solver is registered
-        (i.e. the srm_1d transient plugin was discovered)."""
+        (i.e. the srm_1d transient plugin was discovered). The selection is
+        coupled to the Preferences solver dropdown via PreferencesManager."""
         names = solvers.list_solvers()
         if len(names) < 2:
             return  # No external solver discovered — keep the menu clean.
@@ -120,7 +134,8 @@ class Window(QMainWindow):
         self.solverMenu = QMenu('Solver', self)
         self.solverActionGroup = QActionGroup(self)
         self.solverActionGroup.setExclusive(True)
-        active = self.app.simulationManager.activeSolverName
+        self.solverActions = {}
+        active = self.app.preferencesManager.preferences.activeSolver
         for name in names:
             action = self.solverMenu.addAction(name)
             action.setCheckable(True)
@@ -128,11 +143,21 @@ class Window(QMainWindow):
             action.triggered.connect(
                 lambda _checked, n=name: self.selectSolver(n))
             self.solverActionGroup.addAction(action)
+            self.solverActions[name] = action
         self.ui.menuSimulate.addSeparator()
         self.ui.menuSimulate.addMenu(self.solverMenu)
+        # Keep the menu check in sync when the active solver changes elsewhere
+        # (the Preferences dropdown).
+        self.app.preferencesManager.activeSolverChanged.connect(
+            self.syncSolverMenu)
 
     def selectSolver(self, name):
-        self.app.simulationManager.setActiveSolver(name)
+        self.app.preferencesManager.setActiveSolver(name)
+
+    def syncSolverMenu(self, name):
+        action = getattr(self, 'solverActions', {}).get(name)
+        if action is not None and not action.isChecked():
+            action.setChecked(True)  # exclusive group unchecks the others
 
     def setupPropSelector(self):
         self.ui.pushButtonPropEditor.pressed.connect(self.app.propellantManager.showMenu)
@@ -281,7 +306,8 @@ class Window(QMainWindow):
             elif gid == len(cm.grains):
                 self.ui.motorEditor.loadObject(cm.nozzle)
             else:
-                self.ui.motorEditor.loadObject(cm.config)
+                self.ui.motorEditor.loadMotorConfig(
+                    cm, self.app.preferencesManager.preferences.activeSolver)
             self.toggleGrainButtons(False)
 
     def copyGrain(self):

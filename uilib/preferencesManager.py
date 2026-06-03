@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QApplication
 from motorlib.properties import PropertyCollection, EnumProperty
 from motorlib.units import unitLabels, getAllConversions
 from motorlib.motor import MotorConfig
+from motorlib.solvers import QUASI_STEADY
 
 from .fileIO import loadFile, saveFile, getConfigPath, fileTypes
 from .defaults import DEFAULT_PREFERENCES
@@ -20,6 +21,15 @@ class Preferences():
         for unit in unitLabels:
             self.units.props[unit] = EnumProperty(unitLabels[unit], getAllConversions(unit))
 
+        # v0.8.0: per-solver run-config, keyed by solver name. Stored as plain
+        # value dicts (the schema is owned by each solver plugin, which may not
+        # be importable here). The built-in quasi-steady solver uses `general`
+        # and has no entry. Tolerant to absence for backward compatibility.
+        self.solverConfigs = {}
+        # v0.8.0: the active solver (which solver runs + whose config the
+        # config screen shows). Persisted so the choice survives restarts.
+        self.activeSolver = QUASI_STEADY
+
         if propDict is not None:
             self.applyDict(propDict)
 
@@ -27,11 +37,28 @@ class Preferences():
         prefDict = {}
         prefDict['general'] = self.general.getProperties()
         prefDict['units'] = self.units.getProperties()
+        prefDict['solverConfigs'] = self.solverConfigs
+        prefDict['activeSolver'] = self.activeSolver
         return prefDict
 
     def applyDict(self, dictionary):
         self.general.setProperties(dictionary['general'])
         self.units.setProperties(dictionary['units'])
+        self.solverConfigs = dictionary.get('solverConfigs', {})
+        # Preserve the current active solver when the dict omits it (the
+        # Preferences 'Apply' emits general/units/solverConfigs only; the
+        # active solver is set live via setActiveSolver). Fall back to QS only
+        # when truly unset (fresh Preferences / no saved value).
+        self.activeSolver = dictionary.get(
+            'activeSolver', getattr(self, 'activeSolver', QUASI_STEADY))
+
+    def getSolverConfig(self, name):
+        """Return the saved run-config dict for a solver (empty if unset)."""
+        return self.solverConfigs.get(name, {})
+
+    def setSolverConfig(self, name, config):
+        """Store the run-config dict for a solver."""
+        self.solverConfigs[name] = config
 
     def getUnit(self, fromUnit):
         if fromUnit in self.units.props:
@@ -42,6 +69,9 @@ class Preferences():
 class PreferencesManager(QObject):
 
     preferencesChanged = pyqtSignal(object)
+    # Emitted when the active solver changes (from the Sim menu or the
+    # Preferences solver dropdown) so both stay in sync.
+    activeSolverChanged = pyqtSignal(str)
 
     def __init__(self, makeMenu=True):
         super().__init__()
@@ -49,7 +79,17 @@ class PreferencesManager(QObject):
         if makeMenu:
             self.menu = preferencesMenu.PreferencesMenu()
             self.menu.preferencesApplied.connect(self.newPreferences)
+            self.menu.activeSolverChanged.connect(self.setActiveSolver)
         self.loadPreferences()
+
+    def setActiveSolver(self, name):
+        """Set the active solver, persist it, and notify listeners (the Sim
+        menu, the Preferences dropdown) so the selection stays coupled."""
+        if name == self.preferences.activeSolver:
+            return
+        self.preferences.activeSolver = name
+        self.savePreferences()
+        self.activeSolverChanged.emit(name)
 
     def newPreferences(self, prefDict):
         logger.log('Updating preferences')

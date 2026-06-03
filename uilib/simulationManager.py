@@ -33,24 +33,20 @@ class SimulationManager(QObject):
         self.motor = None
         self.preferences = None
 
-        # v0.8.0 (D6): the active solver is selected by name from the
-        # motorlib.solvers registry, defaulting to the built-in quasi-steady
-        # solver so behavior is unchanged until the user picks another.
-        self.activeSolverName = solvers.QUASI_STEADY
-
         self.currentSimThread = None
         self.threadStopped = False # Set to true to stop simulation thread after it finishes the iteration it is on
 
     def setPreferences(self, preferences):
         self.preferences = preferences
 
-    def setActiveSolver(self, name):
-        """Select the active solver by registry name. Falls back to the
-        quasi-steady solver if the name isn't registered."""
+    def activeSolverName(self):
+        """The active solver name (single source of truth: Preferences).
+        Falls back to the quasi-steady solver when unset / unregistered."""
+        name = (self.preferences.activeSolver
+                if self.preferences is not None else solvers.QUASI_STEADY)
         if solvers.get_solver(name) is None:
             name = solvers.QUASI_STEADY
-        self.activeSolverName = name
-        logger.log('Active solver set to "{}"'.format(name))
+        return name
 
     def runSimulation(self, motor, show=True): # Show sets if the results will be reported on newSimulationResult and shown in UI
         logger.log('Running simulation')
@@ -61,24 +57,33 @@ class SimulationManager(QObject):
         self.currentSimThread.start()
 
     def _simThread(self, show):
-        solver = solvers.get_solver(self.activeSolverName)
+        name = self.activeSolverName()
+        solver = solvers.get_solver(name)
+        # Run-config precedence: a per-motor override (the motor's own config,
+        # edited via the grain-table Config row) wins over the global default
+        # (Preferences -> the solver's config page). Empty for the quasi-steady
+        # solver, which reads the shared global MotorConfig instead.
+        config = None
+        perMotor = getattr(self.motor, 'solverConfigs', None) or {}
+        if perMotor.get(name):
+            config = perMotor[name]
+        elif self.preferences is not None:
+            config = self.preferences.getSolverConfig(name) or None
         try:
             if solver is None:
                 simRes = self.motor.runSimulation(self.updateProgressBar)
             else:
                 simRes = solver.simulate(
-                    self.motor, callback=self.updateProgressBar)
+                    self.motor, config=config, callback=self.updateProgressBar)
         except Exception as exc:
             # A solver (e.g. the srm_1d transient backend) may raise — surface
             # it as a failed result with an alert rather than hanging the
             # progress dialog, which only hides on simulationDone.
-            logger.error('Solver "{}" failed: {}'.format(
-                self.activeSolverName, exc))
+            logger.error('Solver "{}" failed: {}'.format(name, exc))
             simRes = SimulationResult(self.motor)
             simRes.addAlert(SimAlert(
                 SimAlertLevel.ERROR, SimAlertType.VALUE,
-                'Solver "{}" failed: {}'.format(self.activeSolverName, exc),
-                'Solver'))
+                'Solver "{}" failed: {}'.format(name, exc), 'Solver'))
         self.simulationDone.emit(simRes)
         if simRes.success and show:
             logger.log('Simulation succeeded')

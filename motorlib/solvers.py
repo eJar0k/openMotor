@@ -30,6 +30,14 @@ class SolverPlugin:
     def simulate(self, motor, config=None, callback=None):
         raise NotImplementedError
 
+    def get_config_schema(self):
+        """Return a ``PropertyCollection`` describing this solver's tunable
+        run parameters, or ``None`` if the solver uses only the standard
+        global ``MotorConfig`` (Preferences -> General). The GUI renders this
+        schema as the solver's config page; the collected values are passed
+        back to :meth:`simulate` as the ``config`` dict. Default: ``None``."""
+        return None
+
 
 def register_solver(solver):
     """Register a solver instance under its ``name``. Returns the solver."""

@@ -67,20 +67,44 @@ class CollectionEditor(QWidget):
 
     def loadProperties(self, obj):
         self.cleanup()
+        self._addPropertyRows(obj)
+        if self.buttons:
+            self.applyButton.show()
+            self.cancelButton.show()
+        self.propertyUpdate()
+
+    def loadGrouped(self, groups):
+        """Render several property collections as labelled sections in one
+        form. ``groups`` is a list of ``(headerText, collection)`` tuples; a
+        bold header row precedes each group's property rows. Property editors
+        are registered flat (keys must be unique across groups), so
+        ``getProperties`` returns every group's values together."""
+        self.cleanup()
+        for headerText, obj in groups:
+            header = QLabel(headerText)
+            font = header.font()
+            font.setBold(True)
+            header.setFont(font)
+            self.form.addRow(header)
+            self._addPropertyRows(obj)
+        if self.buttons:
+            self.applyButton.show()
+            self.cancelButton.show()
+        self.propertyUpdate()
+
+    def _addPropertyRows(self, obj):
         for prop in obj.props:
             self.propertyEditors[prop] = PropertyEditor(self, obj.props[prop], self.preferences)
             self.propertyEditors[prop].valueChanged.connect(self.propertyUpdate)
             label = QLabel('{}:'.format(obj.props[prop].dispName))
             label.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
             self.form.addRow(label, self.propertyEditors[prop])
-        if self.buttons:
-            self.applyButton.show()
-            self.cancelButton.show()
-        self.propertyUpdate()
 
     def cleanup(self):
-        for _ in self.propertyEditors:
-            self.form.removeRow(0) # Removes the first row, but will delete all by the end of the loop
+        # Remove every row (property rows AND any section-header rows added by
+        # loadGrouped), not just one per property editor.
+        while self.form.rowCount() > 0:
+            self.form.removeRow(0)
         self.propertyEditors = {}
 
         if self.buttons:

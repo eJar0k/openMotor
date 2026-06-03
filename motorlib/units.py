@@ -15,7 +15,10 @@ unitLabels = {
     'kg/(m^2*s)': 'Mass Flux',
     'm/(s*Pa^n)': 'Burn Rate Coefficient',
     '(m*Pa)/s': 'Nozzle Slag Coefficient',
-    'm/(s*Pa)': 'Nozzle Erosion Coefficient'
+    'm/(s*Pa)': 'Nozzle Erosion Coefficient',
+    'um': 'Surface Roughness'  # v0.8.0: dedicated category so roughness gets
+                               # its own unit selector (default um) independent
+                               # of the global Length unit.
 }
 
 unitTable = [
@@ -60,7 +63,12 @@ unitTable = [
     ('m/(s*Pa)', 'um/(s*mPa)', 1E9),
 
     ('m/(s*Pa^n)', 'in/(s*psi^n)', 39.37), # Ratio converts m/s to in/s. The pressure conversion must be done separately
-    ('m/(s*Pa^n)', 'mm/(s*Pa^n)', 1000)
+    ('m/(s*Pa^n)', 'mm/(s*Pa^n)', 1000),
+
+    ('um', 'mm', 1e-3),     # 1000 um = 1 mm
+    ('um', 'm', 1e-6),      # 1e6 um = 1 m
+    ('um', 'mil', 1/25.4),  # 25.4 um = 1 thou/mil
+    ('um', 'in', 1/25400)
 ]
 
 # Some base units are... not well chosen because any reasonable value in them will have too many/few digits to edit,
