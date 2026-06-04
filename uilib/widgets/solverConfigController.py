@@ -47,11 +47,21 @@ class SolverConfigController:
         ``motor.solverConfigs``), keyed by solver name.
     """
 
-    def __init__(self, editor, generalSource, solverConfigsValues):
+    def __init__(self, editor, generalSource, solverConfigsValues,
+                 igniterSource=None):
         self.editor = editor
         self.generalCopy = MotorConfig()
         self.generalCopy.setProperties(generalSource.getProperties())
         self.sharedColl = _subset(self.generalCopy, SHARED_CONFIG_KEYS)
+
+        # Per-motor igniter chamber (srm_1d only): a working copy edited as an
+        # extra section under the igniter-capable solver. None on the global
+        # Preferences screen (igniter is per-motor).
+        self.igniterCopy = None
+        if igniterSource is not None:
+            from motorlib.igniter import Igniter
+            self.igniterCopy = Igniter()
+            self.igniterCopy.setProperties(igniterSource.getProperties())
 
         self.specificColls = {}
         self.generalName = solvers.QUASI_STEADY
@@ -70,16 +80,25 @@ class SolverConfigController:
     def solverNames(self):
         return list(self.specificColls.keys())
 
+    def usesIgniter(self, name):
+        solver = solvers.get_solver(name)
+        return bool(self.igniterCopy is not None and solver
+                    and solver.capabilities.get('igniter'))
+
     def show(self, name):
-        """Render the shared + solver-specific sections for ``name``."""
+        """Render the shared + solver-specific (+ igniter) sections for
+        ``name``."""
         if not name or name not in self.specificColls:
             return
         self.save()
         self.current = name
-        self.editor.loadGrouped([
+        groups = [
             ('Shared settings', self.sharedColl),
             ('{} settings'.format(name), self.specificColls[name]),
-        ])
+        ]
+        if self.usesIgniter(name):
+            groups.append(('Igniter chamber', self.igniterCopy))
+        self.editor.loadGrouped(groups)
 
     def save(self):
         """Persist the visible page's edits into the in-memory collections."""
@@ -88,6 +107,12 @@ class SolverConfigController:
         values = self.editor.getProperties()
         self.sharedColl.setProperties(values)
         self.specificColls[self.current].setProperties(values)
+        if self.usesIgniter(self.current):
+            self.igniterCopy.setProperties(values)
+
+    def igniterProps(self):
+        """The edited igniter-chamber values (or None when no igniter)."""
+        return self.igniterCopy.getProperties() if self.igniterCopy else None
 
     def extract(self):
         """Return ``(general_dict, solver_configs_dict)`` for persisting."""

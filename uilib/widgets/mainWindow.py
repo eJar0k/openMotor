@@ -72,9 +72,20 @@ class Window(QMainWindow):
 
     def setupMotorEditor(self):
         self.ui.motorEditor.setPreferences(self.app.preferencesManager.preferences)
+        # The config screen can have many rows (shared + solver + igniter
+        # chamber sections); wrap the editor pane in a scroll area so the
+        # inputs aren't compacted off-screen.
+        from PyQt6.QtWidgets import QScrollArea
+        self._editorScroll = QScrollArea()
+        self._editorScroll.setWidgetResizable(True)
+        self._editorScroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.ui.motorEditor.setMinimumHeight(0)
+        self._editorScroll.setWidget(self.ui.motorEditor)  # reparents out of layout
+        self.ui.verticalLayoutMotorEditor.insertWidget(0, self._editorScroll)
+        self._editorScroll.setMinimumHeight(300)
         self.ui.pushButtonEditGrain.pressed.connect(self.editGrain)
         self.ui.motorEditor.changeApplied.connect(self.applyChange)
-        # Per-motor solver-aware config (grain-table 'Config' row).
+        # Per-motor solver-aware config + igniter (grain-table 'Config' row).
         self.ui.motorEditor.motorConfigApplied.connect(self.applyMotorConfig)
         self.ui.motorEditor.activeSolverChanged.connect(
             self.app.preferencesManager.setActiveSolver)
@@ -83,10 +94,21 @@ class Window(QMainWindow):
         # Enables only buttons for actions possible given the selected grain
         self.ui.motorEditor.closed.connect(self.checkGrainSelection)
 
-    def applyMotorConfig(self, general, solverConfigs):
+    def applyMotorConfig(self, general, solverConfigs, pyrogenName, igniterProps):
         cm = self.app.fileManager.getCurrentMotor()
         cm.config.setProperties(general)
         cm.solverConfigs = solverConfigs
+        # Igniter (srm_1d only): copy the picked library pyrogen into the
+        # motor's embedded material (mirrors the grain propellant picker) and
+        # apply the chamber settings. Empty/None for solvers without an igniter.
+        if pyrogenName:
+            try:
+                libPyro = self.app.pyrogenManager.getPyrogenByName(pyrogenName)
+                cm.igniterPyrogen.setProperties(libPyro.getProperties())
+            except (ValueError, IndexError):
+                pass
+        if igniterProps:
+            cm.igniter.setProperties(igniterProps)
         self.app.fileManager.addNewMotorHistory(cm)
         self.updateGrainTable()
 
@@ -112,6 +134,12 @@ class Window(QMainWindow):
         self.ui.actionRedo.triggered.connect(self.redo)
         self.ui.actionPreferences.triggered.connect(self.app.preferencesManager.showMenu)
         self.ui.actionPropellantEditor.triggered.connect(self.app.propellantManager.showMenu)
+        # Pyrogen library — added programmatically (no .ui edit), mirroring the
+        # Propellant Editor. Manages the reusable igniter-material library.
+        # Pyrogen library lives under the Edit menu (not the top toolbar), so
+        # it stays visible for all solvers — harmless under quasi-steady.
+        self.actionPyrogenLibrary = self.ui.menuEdit.addAction('Pyrogen Library')
+        self.actionPyrogenLibrary.triggered.connect(self.app.pyrogenManager.showMenu)
 
         # Sim
         self.ui.actionRunSimulation.triggered.connect(self.runSimulation)
@@ -158,6 +186,8 @@ class Window(QMainWindow):
         action = getattr(self, 'solverActions', {}).get(name)
         if action is not None and not action.isChecked():
             action.setChecked(True)  # exclusive group unchecks the others
+        # Show/hide the per-motor Igniter row for the new active solver.
+        self.updateGrainTable()
 
     def setupPropSelector(self):
         self.ui.pushButtonPropEditor.pressed.connect(self.app.propellantManager.showMenu)
@@ -307,7 +337,8 @@ class Window(QMainWindow):
                 self.ui.motorEditor.loadObject(cm.nozzle)
             else:
                 self.ui.motorEditor.loadMotorConfig(
-                    cm, self.app.preferencesManager.preferences.activeSolver)
+                    cm, self.app.preferencesManager.preferences.activeSolver,
+                    self.app.pyrogenManager.getNames())
             self.toggleGrainButtons(False)
 
     def copyGrain(self):

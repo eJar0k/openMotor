@@ -30,6 +30,20 @@ DEFAULT_PREFERENCES = {
     }
 }
 
+# Seed pyrogen-material library (the IGNITERS file section), mirroring
+# DEFAULT_PROPELLANTS. BPNV is the validated default igniter material.
+DEFAULT_PYROGENS = [
+    {
+        'name': 'BPNV', 'a': 2.0e-5, 'n': 0.50, 'rho': 1700.0,
+        'T_flame': 2800.0, 'M': 0.030, 'gamma': 1.25,
+        'impetus_W': 5000.0, 'heat_flux_cal_cm2_s': 69.4,
+        'kappa_jet': 8.0, 'form': 'pellets',
+        'particle_diameter_m': 3.2e-3, 'particle_LD_ratio': 1.0,
+        'heat_delivery_mode': 'demar', 'pellet_emissivity': 0.7,
+        'radiation_absorption_length_m': 1.0,
+    },
+]
+
 CL_PROPS = {
             'name': 'MIT - Cherry Limeade',
             'density': 1670,

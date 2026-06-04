@@ -9,7 +9,7 @@ from PyQt6.QtCore import Qt
 
 import motorlib
 from motorlib import simResult, solvers
-from uilib import preferencesManager, propellantManager, simulationManager, fileManager, toolManager
+from uilib import preferencesManager, propellantManager, pyrogenManager, simulationManager, fileManager, toolManager
 from uilib import importExportManager
 import uilib.widgets.mainWindow
 from uilib.logger import logger
@@ -33,6 +33,9 @@ class App(QApplication):
 
         self.propellantManager = uilib.propellantManager.PropellantManager()
         self.preferencesManager.preferencesChanged.connect(self.propellantManager.setPreferences)
+
+        self.pyrogenManager = uilib.pyrogenManager.PyrogenManager()
+        self.preferencesManager.preferencesChanged.connect(self.pyrogenManager.setPreferences)
 
         self.simulationManager = uilib.simulationManager.SimulationManager()
         self.preferencesManager.preferencesChanged.connect(self.simulationManager.setPreferences)

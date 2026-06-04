@@ -58,8 +58,12 @@ class EngExporter(Exporter):
                                  config['manufacturer']
                                  ]) + '\n'
 
-            timeData = self.manager.simRes.channels['time'].getData()
-            forceData = self.manager.simRes.channels['force'].getData()
+            # Copy, don't alias: getData() returns the channel's live list, so
+            # appending the trailing 0-thrust point below would mutate the
+            # shared SimulationResult in place (ragged time/force channels ->
+            # a later getCSV / re-render crashes). Copy first.
+            timeData = list(self.manager.simRes.channels['time'].getData())
+            forceData = list(self.manager.simRes.channels['force'].getData())
             # Add on a 0-thrust datapoint right after the burn to satisfy RAS Aero
             if forceData[-1] != 0:
                 timeData.append(self.manager.simRes.getBurnTime() + 0.01)

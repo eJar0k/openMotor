@@ -62,7 +62,7 @@ class Igniter(PropertyCollection):
         self.props['throat_area'] = FloatProperty('Throat Area', 'm^2', -1, 1)
         self.props['volume'] = FloatProperty('Volume', 'm^3', -1, 1)
         self.props['burn_area'] = FloatProperty('Burn Area', 'm^2', -1, 100)
-        self.props['burn_law'] = StringProperty('Burn Law')
+        self.props['burn_law'] = EnumProperty('Burn Law', ['0d', 'end_burning'])
         self.props['injection_topology'] = EnumProperty(
             'Injection Topology', ['forward_plenum', 'head_basket', 'aft_basket'])
         self.props['cartridge_length_m'] = FloatProperty('Cartridge Length', 'm', -1, 100)
