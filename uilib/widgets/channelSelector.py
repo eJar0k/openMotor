@@ -34,6 +34,25 @@ class ChannelSelector(QGroupBox):
                 if channel in disabled:
                     check.setEnabled(False)
 
+    def appendStationFields(self, fields, defaultChecked=()):
+        """Append srm_1d per-cell axial field checkboxes AFTER the normal
+        openMotor channels (so the standard channels stay selectable and the
+        graph can ALSO plot a carried field — burn rate / regression / Mach /
+        … — sliced at each selected station vs time). ``fields`` is a list of
+        ``(key, label)`` pairs; ``defaultChecked`` keys start checked (e.g. the
+        axial 'P' that replaces the chamber-pressure channel). Idempotent per
+        key. Initial check state is set BEFORE connecting the signal so setup
+        doesn't emit checksChanged."""
+        for key, label in fields:
+            if key in self.checks:
+                continue
+            check = QCheckBox(label)
+            if key in defaultChecked:
+                check.setCheckState(Qt.CheckState.Checked)
+            self.layout().addWidget(check)
+            self.checks[key] = check
+            self.checks[key].toggled.connect(self.checksChanged.emit)
+
     def getSelectedChannels(self):
         selected = []
         for check in self.checks:
