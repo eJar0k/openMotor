@@ -24,6 +24,8 @@ from PyQt6.QtCore import pyqtSignal, Qt
 
 import numpy as np
 
+from motorlib import units
+
 
 class StationRow(QWidget):
     """One station row: a visibility checkbox + label, with edit/delete buttons
@@ -85,7 +87,18 @@ class StationSelector(QGroupBox):
         self._stations = []        # [{'id', 'cell_index', 'active'}]
         self._next_id = 0
         self._editing_id = None
+        self._distUnit = 'mm'      # display unit for station distances (user pref)
         self._build_ui()
+
+    def setLengthUnit(self, unit):
+        """Set the user's length unit (e.g. 'mm'/'in') for station distance
+        labels. Call before ``setup`` so the initial labels honor it."""
+        self._distUnit = unit if unit else 'mm'
+
+    def _fmtDist(self, meters):
+        """Format a cell-center distance [m] in the user's length unit."""
+        val = units.convert(meters, 'm', self._distUnit)
+        return '{:g} {}'.format(round(val, 2), self._distUnit)
 
     # ---- construction -------------------------------------------------
     def _build_ui(self):
@@ -222,7 +235,7 @@ class StationSelector(QGroupBox):
 
     def _after_value(self, v):
         if self._x_cell is not None and 0 <= v < self._n:
-            self.distLabel.setText('{:.0f} mm'.format(self._x_cell[v] * 1000.0))
+            self.distLabel.setText(self._fmtDist(self._x_cell[v]))
         self._update_add_enabled(v)
 
     def _update_add_enabled(self, v):
@@ -280,8 +293,8 @@ class StationSelector(QGroupBox):
     def _row_text(self, st, cls):
         role = cls['role']
         prefix = (role + ' ') if role else ''
-        dist = self._x_cell[st['cell_index']] * 1000.0
-        return '{}(c{}/{}) · {:.0f} mm'.format(prefix, st['cell_index'], self._n, dist)
+        dist = self._fmtDist(self._x_cell[st['cell_index']])
+        return '{}(c{}/{}) · {}'.format(prefix, st['cell_index'], self._n, dist)
 
     def _rebuild_list(self):
         from srm_1d.station_viz import cell_categories, classify_cell

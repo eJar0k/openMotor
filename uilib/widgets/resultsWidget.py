@@ -127,6 +127,7 @@ class ResultsWidget(QWidget):
             # Swap the grain checkbox list for the rich station selector.
             self.ui.grainSelector.setVisible(False)
             self.stationSelector.setVisible(True)
+            self.stationSelector.setLengthUnit(self.preferences.getUnit('m'))
             self.stationSelector.setup(self._axial)
         else:
             if self._yMode != 'channel':
