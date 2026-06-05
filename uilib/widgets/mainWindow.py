@@ -16,6 +16,14 @@ class Window(QMainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
 
+        # Give the plot/results column the horizontal slack so it takes the
+        # majority of the window. The motor-editor and results columns are both
+        # Preferred with no stretch in the .ui, which otherwise splits the width
+        # ~50/50 regardless of need (the editor only wants its content width).
+        # horizontalLayout: [0] motor-editor column, [1] divider, [2] results.
+        self.ui.horizontalLayout.setStretch(0, 0)
+        self.ui.horizontalLayout.setStretch(2, 1)
+
         self.app = app
 
         self.setWindowIcon(self.app.icon)
