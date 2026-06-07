@@ -34,6 +34,8 @@ class ResultsWidget(QWidget):
         ('r_erosive', 'Erosive Burn Rate', 'm/s'),
         ('regress', 'Regression', 'm'),
         ('u', 'Velocity', 'm/s'),
+        ('G', 'Mass Flux', 'kg/(m^2*s)'),
+        ('rho', 'Gas Density', 'kg/m^3'),
         ('T', 'Gas Temperature', 'K'),
         ('D_port', 'Port Diameter', 'm'),
     )
