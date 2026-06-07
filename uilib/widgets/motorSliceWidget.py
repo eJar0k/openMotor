@@ -169,9 +169,10 @@ class MotorSliceWidget(FigureCanvas):
         self.ax = None
         self._cb = None
         self._artists = ()          # (mesh, fillTop, fillBot) for the current frame
-        self._stations = []         # selected stations to highlight
-        self._markers = []          # station marker artists (band+line+label)
-        self._labelsVisible = True  # station-label toggle
+        self._stations = []          # selected stations to highlight
+        self._markers = []           # station marker artists (band+line+label)
+        self._stationsVisible = True # master station-marker toggle
+        self._labelsVisible = True   # station-label sub-toggle
         self._hover = None
         self._norm = None
         self._range_cache = {}      # field -> (vmin, vmax) in display units
@@ -210,8 +211,13 @@ class MotorSliceWidget(FigureCanvas):
         self._stations = list(stations or [])
         self._drawStations()
 
+    def setStationsVisible(self, visible):
+        """Master toggle for all station markers (band + line + label)."""
+        self._stationsVisible = bool(visible)
+        self._drawStations()
+
     def setLabelsVisible(self, visible):
-        """Toggle the station labels (the band + center line always show)."""
+        """Toggle just the station labels (band + center line still show)."""
         self._labelsVisible = bool(visible)
         self._drawStations()
 
@@ -271,7 +277,7 @@ class MotorSliceWidget(FigureCanvas):
         theme = _themeColors()
         self._hover = self.ax.text(
             0.01, 0.98, '', transform=self.ax.transAxes, ha='left', va='top',
-            fontsize='small', zorder=5, visible=False, color=theme['fg'],
+            fontsize='small', zorder=10, visible=False, color=theme['fg'],
             bbox=dict(boxstyle='round', fc=theme['bg'], ec=theme['ec'],
                       alpha=0.96, linewidth=0.8))
         # Reserve title headroom BEFORE per-frame set_title so it isn't clipped.
@@ -314,29 +320,38 @@ class MotorSliceWidget(FigureCanvas):
             except Exception:
                 pass
         self._markers = []
-        if self.ax is None or self.axial is None or self._norm is None or not self._stations:
+        if (self.ax is None or self.axial is None or self._norm is None
+                or not self._stations or not self._stationsVisible):
             self.draw_idle()
             return
         x = np.asarray(self.axial['x_cell'], float) * self._lenScale
         dxh = 0.5 * float(self.axial['dx']) * self._lenScale
         Ro = 0.5 * float(self.axial['D_outer']) * self._lenScale
         n = x.size
-        for st in self._stations:
-            ci = int(st.get('cell_index', -1))
-            if not (0 <= ci < n):
-                continue
+        # Sort by axial position so adjacent labels can be staggered in y to
+        # avoid overlap (cycle 2 levels when within a horizontal threshold).
+        valid = sorted((s for s in self._stations
+                        if 0 <= int(s.get('cell_index', -1)) < n),
+                       key=lambda s: x[int(s['cell_index'])])
+        span = float(x[-1] - x[0]) if n > 1 else 1.0
+        thr = 0.05 * span        # labels closer than this stagger
+        prev_x, level = -1e30, 0
+        for st in valid:
+            ci = int(st['cell_index'])
             xc = x[ci]
             band = self.ax.axvspan(xc - dxh, xc + dxh, color=_ACCENT, alpha=0.16, zorder=3)
             line = self.ax.axvline(xc, color=_ACCENT, lw=1.1, alpha=0.9, zorder=4)
             self._markers += [band, line]
             if self._labelsVisible:
+                level = (level + 1) % 2 if (xc - prev_x) < thr else 0
                 lab = self.ax.text(
-                    xc, Ro * 0.93, self._marker_label(st), color=_LABEL_FG,
-                    rotation=90, ha='center', va='top', fontsize=8, zorder=5,
-                    linespacing=1.3,
+                    xc, Ro * (0.93 - 0.50 * level), self._marker_label(st),
+                    color=_LABEL_FG, rotation=90, ha='center', va='top',
+                    fontsize=8, zorder=6, linespacing=1.3,
                     bbox=dict(boxstyle='round,pad=0.4', fc=_LABEL_BG, ec=_ACCENT,
                               alpha=0.95, linewidth=0.8))
                 self._markers.append(lab)
+            prev_x = xc
         self.draw_idle()
 
     # -- mouseover readout ----------------------------------------------

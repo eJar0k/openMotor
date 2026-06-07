@@ -83,6 +83,9 @@ class ResultsWidget(QWidget):
         for _key, label, _u in SLICE_FIELDS:
             self.sliceFieldCombo.addItem(label)
         self.sliceFieldCombo.currentIndexChanged.connect(self._onSliceFieldChanged)
+        self.sliceStationsCheck = QCheckBox('Stations')
+        self.sliceStationsCheck.setChecked(True)
+        self.sliceStationsCheck.toggled.connect(self._onStationsToggled)
         self.sliceLabelsCheck = QCheckBox('Station labels')
         self.sliceLabelsCheck.setChecked(True)
         self.sliceLabelsCheck.toggled.connect(self.motorSliceWidget.setLabelsVisible)
@@ -90,6 +93,7 @@ class ResultsWidget(QWidget):
         sliceBar.addWidget(QLabel('Bore field:'))
         sliceBar.addWidget(self.sliceFieldCombo)
         sliceBar.addSpacing(16)
+        sliceBar.addWidget(self.sliceStationsCheck)
         sliceBar.addWidget(self.sliceLabelsCheck)
         sliceBar.addStretch(1)
         self._sliceBarWidget = QWidget()
@@ -128,6 +132,12 @@ class ResultsWidget(QWidget):
     def _onSliceFieldChanged(self, idx):
         if 0 <= idx < len(SLICE_FIELDS):
             self.motorSliceWidget.setField(SLICE_FIELDS[idx][0])
+
+    def _onStationsToggled(self, on):
+        """Master Stations toggle: show/hide the markers and grey out the
+        Station-labels sub-toggle when markers are off."""
+        self.motorSliceWidget.setStationsVisible(on)
+        self.sliceLabelsCheck.setEnabled(on)
 
     def setupGrainChecks(self, numGrains, restoreCachedChecks):
         self.ui.grainSelector.resetChecks()
