@@ -26,8 +26,19 @@ import matplotlib.cm as cm
 from matplotlib.colors import Normalize
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from PyQt6.QtWidgets import QApplication
 
 import motorlib
+
+
+def _themeColors():
+    """High-contrast readout colors matched to openMotor's light/dark theme
+    (mirrors the isDarkMode() convention used by the grain/preview widgets)."""
+    app = QApplication.instance()
+    dark = bool(app and app.isDarkMode())
+    if dark:
+        return {'fg': '#ececec', 'bg': '#232323', 'ec': '#9a9a9a'}
+    return {'fg': '#101010', 'bg': '#ffffff', 'ec': '#202020'}
 
 # Bore fields offered in the field dropdown: (payload-key, label, unit-cat).
 SLICE_FIELDS = (
@@ -236,10 +247,16 @@ class MotorSliceWidget(FigureCanvas):
         suffix = ' ({})'.format(self._fieldUnit) if self._fieldUnit else ''
         self._cb.set_label('{}{}'.format(label, suffix))
 
+        # Theme-matched, opaque readout box (the light-grey grain washed out a
+        # translucent white box). Colors follow openMotor's isDarkMode theme.
+        theme = _themeColors()
         self._hover = self.ax.text(
             0.01, 0.98, '', transform=self.ax.transAxes, ha='left', va='top',
-            fontsize='small', zorder=5, visible=False,
-            bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.85))
+            fontsize='small', zorder=5, visible=False, color=theme['fg'],
+            bbox=dict(boxstyle='round', fc=theme['bg'], ec=theme['ec'],
+                      alpha=0.96, linewidth=0.8))
+        # Reserve title headroom BEFORE per-frame set_title so it isn't clipped.
+        self.ax.set_title('t = 0.000 s', fontsize='medium')
         try:
             self.figure.tight_layout()
         except Exception:
