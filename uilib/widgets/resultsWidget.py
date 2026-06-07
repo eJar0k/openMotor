@@ -1,4 +1,5 @@
-from PyQt6.QtWidgets import QWidget, QHeaderView, QLabel, QTableWidgetItem
+from PyQt6.QtWidgets import (QWidget, QHeaderView, QLabel, QTableWidgetItem,
+                             QComboBox, QHBoxLayout)
 import numpy as np
 
 import motorlib
@@ -7,6 +8,7 @@ from motorlib.constants import standardGravity
 
 from .grainImageWidget import GrainImageWidget
 from .stationSelector import StationSelector
+from .motorSliceWidget import MotorSliceWidget, SLICE_FIELDS
 
 from ..views.ResultsWidget_ui import Ui_ResultsWidget
 
@@ -72,6 +74,26 @@ class ResultsWidget(QWidget):
         self.ui.horizontalSliderTime.valueChanged.connect(self.updateGrainTab)
         self.ui.tableWidgetGrains.setRowHeight(0, 128)
 
+        # v0.8.x roadmap #2: longitudinal motor-slice viewer at the top of the
+        # Grains tab (srm_1d station results only). A field combo selects the
+        # bore quantity; the existing time slider drives the frame. Hidden in
+        # quasi-steady mode.
+        self.sliceFieldCombo = QComboBox()
+        for _key, label, _u in SLICE_FIELDS:
+            self.sliceFieldCombo.addItem(label)
+        self.sliceFieldCombo.currentIndexChanged.connect(self._onSliceFieldChanged)
+        sliceBar = QHBoxLayout()
+        sliceBar.addWidget(QLabel('Bore field:'))
+        sliceBar.addWidget(self.sliceFieldCombo)
+        sliceBar.addStretch(1)
+        self._sliceBarWidget = QWidget()
+        self._sliceBarWidget.setLayout(sliceBar)
+        self.motorSliceWidget = MotorSliceWidget()
+        self.ui.verticalLayout.insertWidget(0, self.motorSliceWidget, stretch=1)
+        self.ui.verticalLayout.insertWidget(0, self._sliceBarWidget)
+        self._sliceBarWidget.setVisible(False)
+        self.motorSliceWidget.setVisible(False)
+
         header = self.ui.tableWidgetAlerts.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -96,6 +118,11 @@ class ResultsWidget(QWidget):
     def setPreferences(self, pref):
         self.preferences = pref
         self.ui.widgetGraph.setPreferences(pref)
+        self.motorSliceWidget.setPreferences(pref)
+
+    def _onSliceFieldChanged(self, idx):
+        if 0 <= idx < len(SLICE_FIELDS):
+            self.motorSliceWidget.setField(SLICE_FIELDS[idx][0])
 
     def setupGrainChecks(self, numGrains, restoreCachedChecks):
         self.ui.grainSelector.resetChecks()
@@ -131,6 +158,10 @@ class ResultsWidget(QWidget):
             self.stationSelector.setVisible(True)
             self.stationSelector.setLengthUnit(self.preferences.getUnit('m'))
             self.stationSelector.setup(self._axial)
+            # Longitudinal motor-slice viewer on (Grains tab).
+            self._sliceBarWidget.setVisible(True)
+            self.motorSliceWidget.setVisible(True)
+            self.motorSliceWidget.setData(self._axial)
         else:
             if self._yMode != 'channel':
                 self.ui.channelSelectorY.resetChecks()
@@ -139,6 +170,9 @@ class ResultsWidget(QWidget):
             self.stationSelector.setVisible(False)
             self.ui.grainSelector.setVisible(True)
             self.setupGrainChecks(len(self.simResult.motor.grains), True)
+            self._sliceBarWidget.setVisible(False)
+            self.motorSliceWidget.setVisible(False)
+            self.motorSliceWidget.setData(None)
 
     def showData(self, simResult):
         self.simResult = simResult
@@ -282,6 +316,14 @@ class ResultsWidget(QWidget):
         if self.simResult is not None:
             index = self.ui.horizontalSliderTime.value()
             currentTime = self.simResult.channels['time'].getPoint(index)
+
+            # Drive the longitudinal slice to the snapshot frame nearest the
+            # slider time (slider is on the per-step grid; the slice payload is
+            # on the decimated snapshot grid).
+            if self._stationMode and self._axial is not None:
+                snap_t = self._axial['snap_times']
+                frame = int(np.argmin(np.abs(snap_t - currentTime)))
+                self.motorSliceWidget.setFrame(frame)
             for col, column in enumerate(self._columns):
                 gid = self._columnGrain(column)
                 grain = self.simResult.motor.grains[gid]
@@ -338,6 +380,9 @@ class ResultsWidget(QWidget):
         self.ui.grainSelector.resetChecks()
         self.stationSelector.clear()
         self.ui.widgetGraph.resetPlot()
+        self._sliceBarWidget.setVisible(False)
+        self.motorSliceWidget.setVisible(False)
+        self.motorSliceWidget.setData(None)
         self.cleanupGrainTab()
 
     def cleanupGrainTab(self):
