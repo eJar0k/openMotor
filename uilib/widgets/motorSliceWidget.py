@@ -165,6 +165,8 @@ class MotorSliceWidget(FigureCanvas):
         self.ax = None
         self._cb = None
         self._artists = ()          # (mesh, fillTop, fillBot) for the current frame
+        self._stations = []         # selected stations to highlight
+        self._markers = []          # station marker artists (band+line+label)
         self._hover = None
         self._norm = None
         self._range_cache = {}      # field -> (vmin, vmax) in display units
@@ -197,6 +199,12 @@ class MotorSliceWidget(FigureCanvas):
         self._rebuildStatic()
         self._drawFrame()
 
+    def setStations(self, stations):
+        """Set the active stations to highlight on the slice (cell_index +
+        label). Markers are at fixed x, so this is independent of the frame."""
+        self._stations = list(stations or [])
+        self._drawStations()
+
     # -- units -----------------------------------------------------------
     def _displayUnits(self, fromUnit):
         if self.preferences is None or not fromUnit:
@@ -222,6 +230,7 @@ class MotorSliceWidget(FigureCanvas):
         """Build the axes + (pinned) colorbar once per field/data change."""
         self.figure.clear()
         self._artists = ()
+        self._markers = []
         self.ax = self.figure.add_subplot(111)
         if self.axial is None or float(self.axial.get('D_outer', 0.0)) <= 0.0:
             self.ax.text(0.5, 0.5, 'No motor-slice data', ha='center',
@@ -261,6 +270,7 @@ class MotorSliceWidget(FigureCanvas):
             self.figure.tight_layout()
         except Exception:
             pass
+        self._drawStations()   # markers survive field changes (figure was cleared)
 
     def _drawFrame(self):
         if self.ax is None or self.axial is None or self._norm is None:
@@ -275,6 +285,47 @@ class MotorSliceWidget(FigureCanvas):
             norm=self._norm, lengthScale=self._lenScale, fieldScale=self._fieldScale)
         self.ax.set_title('t = {:.3f} s'.format(
             float(self.axial['snap_times'][self.frame])), fontsize='medium')
+        self.draw_idle()
+
+    # -- station highlights ---------------------------------------------
+    @staticmethod
+    def _marker_label(st):
+        if st.get('grain', -1) >= 0:
+            return 'G{} {}'.format(st['grain'] + 1, st.get('role', '') or '').strip()
+        return (st.get('role', '') or 'gap')
+
+    def _drawStations(self):
+        """Highlight each active station's cell: a faint accent band over the
+        cell column + a center line + a short label. Fixed in x, so unaffected
+        by the frame; persists across frame swaps (kept off self._artists)."""
+        for art in self._markers:
+            try:
+                art.remove()
+            except Exception:
+                pass
+        self._markers = []
+        if self.ax is None or self.axial is None or self._norm is None or not self._stations:
+            self.draw_idle()
+            return
+        x = np.asarray(self.axial['x_cell'], float) * self._lenScale
+        dxh = 0.5 * float(self.axial['dx']) * self._lenScale
+        Ro = 0.5 * float(self.axial['D_outer']) * self._lenScale
+        n = x.size
+        accent = '#ff5252'
+        theme = _themeColors()
+        for st in self._stations:
+            ci = int(st.get('cell_index', -1))
+            if not (0 <= ci < n):
+                continue
+            xc = x[ci]
+            band = self.ax.axvspan(xc - dxh, xc + dxh, color=accent, alpha=0.16, zorder=3)
+            line = self.ax.axvline(xc, color=accent, lw=1.1, alpha=0.9, zorder=4)
+            lab = self.ax.text(
+                xc, Ro * 0.95, self._marker_label(st), color=accent, rotation=90,
+                ha='center', va='top', fontsize='x-small', zorder=5,
+                bbox=dict(boxstyle='round,pad=0.15', fc=theme['bg'], ec=accent,
+                          alpha=0.9, linewidth=0.6))
+            self._markers += [band, line, lab]
         self.draw_idle()
 
     # -- mouseover readout ----------------------------------------------

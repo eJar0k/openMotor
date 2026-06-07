@@ -162,6 +162,7 @@ class ResultsWidget(QWidget):
             self._sliceBarWidget.setVisible(True)
             self.motorSliceWidget.setVisible(True)
             self.motorSliceWidget.setData(self._axial)
+            self.motorSliceWidget.setStations(self.stationSelector.getSelectedStations())
         else:
             if self._yMode != 'channel':
                 self.ui.channelSelectorY.resetChecks()
@@ -217,6 +218,7 @@ class ResultsWidget(QWidget):
         redrawn in both modes (QS: which grains plot; station: which stations)."""
         if self._stationMode:
             self.rebuildGrainColumns()
+            self.motorSliceWidget.setStations(self.stationSelector.getSelectedStations())
         self.drawGraphs()
 
     def drawGraphs(self):
