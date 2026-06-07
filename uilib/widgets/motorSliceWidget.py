@@ -55,6 +55,10 @@ _STROKE = '#555555'       # fine outline on the propellant (bore wall + end face
 _CASING = '#202020'
 _CMAP = 'viridis'
 
+_ACCENT = '#ff5252'       # station marker line/band/border
+_LABEL_BG = '#d9d9d9'     # oM-style light grey station-label background
+_LABEL_FG = '#1a1a1a'     # dark label text (high contrast on the light-grey box)
+
 
 def _edges_from_centers(centers, dx):
     """n cell-center positions -> n+1 edge positions (midpoints; ends ±dx/2)."""
@@ -167,6 +171,7 @@ class MotorSliceWidget(FigureCanvas):
         self._artists = ()          # (mesh, fillTop, fillBot) for the current frame
         self._stations = []         # selected stations to highlight
         self._markers = []          # station marker artists (band+line+label)
+        self._labelsVisible = True  # station-label toggle
         self._hover = None
         self._norm = None
         self._range_cache = {}      # field -> (vmin, vmax) in display units
@@ -203,6 +208,11 @@ class MotorSliceWidget(FigureCanvas):
         """Set the active stations to highlight on the slice (cell_index +
         label). Markers are at fixed x, so this is independent of the frame."""
         self._stations = list(stations or [])
+        self._drawStations()
+
+    def setLabelsVisible(self, visible):
+        """Toggle the station labels (the band + center line always show)."""
+        self._labelsVisible = bool(visible)
         self._drawStations()
 
     # -- units -----------------------------------------------------------
@@ -311,21 +321,22 @@ class MotorSliceWidget(FigureCanvas):
         dxh = 0.5 * float(self.axial['dx']) * self._lenScale
         Ro = 0.5 * float(self.axial['D_outer']) * self._lenScale
         n = x.size
-        accent = '#ff5252'
-        theme = _themeColors()
         for st in self._stations:
             ci = int(st.get('cell_index', -1))
             if not (0 <= ci < n):
                 continue
             xc = x[ci]
-            band = self.ax.axvspan(xc - dxh, xc + dxh, color=accent, alpha=0.16, zorder=3)
-            line = self.ax.axvline(xc, color=accent, lw=1.1, alpha=0.9, zorder=4)
-            lab = self.ax.text(
-                xc, Ro * 0.95, self._marker_label(st), color=accent, rotation=90,
-                ha='center', va='top', fontsize='x-small', zorder=5,
-                bbox=dict(boxstyle='round,pad=0.15', fc=theme['bg'], ec=accent,
-                          alpha=0.9, linewidth=0.6))
-            self._markers += [band, line, lab]
+            band = self.ax.axvspan(xc - dxh, xc + dxh, color=_ACCENT, alpha=0.16, zorder=3)
+            line = self.ax.axvline(xc, color=_ACCENT, lw=1.1, alpha=0.9, zorder=4)
+            self._markers += [band, line]
+            if self._labelsVisible:
+                lab = self.ax.text(
+                    xc, Ro * 0.93, self._marker_label(st), color=_LABEL_FG,
+                    rotation=90, ha='center', va='top', fontsize=8, zorder=5,
+                    linespacing=1.3,
+                    bbox=dict(boxstyle='round,pad=0.4', fc=_LABEL_BG, ec=_ACCENT,
+                              alpha=0.95, linewidth=0.8))
+                self._markers.append(lab)
         self.draw_idle()
 
     # -- mouseover readout ----------------------------------------------

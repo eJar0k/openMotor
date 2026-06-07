@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (QWidget, QHeaderView, QLabel, QTableWidgetItem,
-                             QComboBox, QHBoxLayout)
+                             QComboBox, QHBoxLayout, QCheckBox)
 import numpy as np
 
 import motorlib
@@ -78,17 +78,22 @@ class ResultsWidget(QWidget):
         # Grains tab (srm_1d station results only). A field combo selects the
         # bore quantity; the existing time slider drives the frame. Hidden in
         # quasi-steady mode.
+        self.motorSliceWidget = MotorSliceWidget()
         self.sliceFieldCombo = QComboBox()
         for _key, label, _u in SLICE_FIELDS:
             self.sliceFieldCombo.addItem(label)
         self.sliceFieldCombo.currentIndexChanged.connect(self._onSliceFieldChanged)
+        self.sliceLabelsCheck = QCheckBox('Station labels')
+        self.sliceLabelsCheck.setChecked(True)
+        self.sliceLabelsCheck.toggled.connect(self.motorSliceWidget.setLabelsVisible)
         sliceBar = QHBoxLayout()
         sliceBar.addWidget(QLabel('Bore field:'))
         sliceBar.addWidget(self.sliceFieldCombo)
+        sliceBar.addSpacing(16)
+        sliceBar.addWidget(self.sliceLabelsCheck)
         sliceBar.addStretch(1)
         self._sliceBarWidget = QWidget()
         self._sliceBarWidget.setLayout(sliceBar)
-        self.motorSliceWidget = MotorSliceWidget()
         self.ui.verticalLayout.insertWidget(0, self.motorSliceWidget, stretch=1)
         self.ui.verticalLayout.insertWidget(0, self._sliceBarWidget)
         self._sliceBarWidget.setVisible(False)
