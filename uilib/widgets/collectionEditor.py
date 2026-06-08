@@ -3,6 +3,8 @@ from PyQt6.QtWidgets import QLabel, QPushButton
 from PyQt6.QtWidgets import QSpacerItem, QSizePolicy
 from PyQt6.QtCore import pyqtSignal
 
+import motorlib
+
 from .propertyEditor import PropertyEditor
 
 
@@ -94,6 +96,11 @@ class CollectionEditor(QWidget):
 
     def _addPropertyRows(self, obj):
         for prop in obj.props:
+            # The axial-taper definition has no inline form widget yet (its
+            # dedicated editor is a later phase); skip it so grains don't show
+            # an empty row. The property still round-trips through getDict.
+            if isinstance(obj.props[prop], motorlib.properties.TaperProperty):
+                continue
             self.propertyEditors[prop] = PropertyEditor(self, obj.props[prop], self.preferences)
             self.propertyEditors[prop].valueChanged.connect(self.propertyUpdate)
             label = QLabel('{}:'.format(obj.props[prop].dispName))

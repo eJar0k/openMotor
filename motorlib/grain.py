@@ -14,7 +14,7 @@ from scipy.signal import savgol_filter
 import mathlib
 
 from . import geometry
-from .properties import EnumProperty, FloatProperty, PropertyCollection
+from .properties import EnumProperty, FloatProperty, PropertyCollection, TaperProperty
 from .simResult import SimAlert, SimAlertLevel, SimAlertType
 from .constants import maximumRefDiameter, maximumRefLength
 
@@ -43,6 +43,33 @@ class Grain(PropertyCollection):
             minValue=0,
             maxValue=maximumRefLength,
         )
+        # Optional axial taper: a single grain whose cross-section (and, in a
+        # later phase, outer diameter) varies along its length. Disabled by
+        # default; the quasi-steady solver expands an enabled taper into a
+        # stack of normal sub-grains at simulate() time (see motorlib.taper),
+        # and srm_1d's transient solver reads the same definition. Solver-
+        # agnostic data only; available on every grain type with no per-
+        # subclass code.
+        self.props["taper"] = TaperProperty("Axial taper")
+
+    def isTapered(self) -> bool:
+        """True if this grain carries an enabled axial-taper definition."""
+        taper = self.props["taper"].getValue()
+        return isinstance(taper, dict) and bool(taper.get("enabled"))
+
+    def getTaperDef(self) -> dict:
+        """The axial-taper definition dict (``{'enabled': False}`` when off)."""
+        return self.props["taper"].getValue()
+
+    def getProperties(self, props=None):
+        """Like PropertyCollection.getProperties, but omit a disabled taper so
+        non-tapered motors serialize byte-identically to pre-taper files. An
+        enabled taper is emitted normally and round-trips via applyDict."""
+        result = super().getProperties(props)
+        taper = result.get("taper")
+        if taper is not None and not (isinstance(taper, dict) and taper.get("enabled")):
+            del result["taper"]
+        return result
 
     def getVolumeSlice(self, regDist: float, dRegDist: float) -> float:
         """

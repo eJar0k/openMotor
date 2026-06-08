@@ -118,6 +118,25 @@ class TabularProperty(Property):
         self.tabs = [self.collection(data) for data in value]
 
 
+class TaperProperty(Property):
+    """A property whose value is a structured axial-taper definition dict (see
+    motorlib.taper). It is stored as a plain dict so it serializes natively to
+    .ric (like PolygonProperty's list). The value passes through untouched
+    rather than being cast, and non-dict inputs are ignored.
+
+    Default is the disabled sentinel ``{'enabled': False}``. Grains override
+    ``getProperties`` to omit a disabled taper so non-tapered motors serialize
+    exactly as they did before tapering existed."""
+
+    def __init__(self, dispName):
+        super().__init__(dispName, "", dict)
+        self.value = {'enabled': False}
+
+    def setValue(self, value):
+        if isinstance(value, dict):
+            self.value = value
+
+
 class PropertyCollection:
     """Holds a set of properties and allows batch operations on them through dictionaries"""
 

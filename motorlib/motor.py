@@ -5,6 +5,7 @@ import numpy as np
 from scipy.optimize import newton
 
 from . import geometry
+from . import taper
 from .constants import atmosphericPressure, gasConstant
 from .grains import EndBurningGrain, grainTypes
 from .nozzle import Nozzle
@@ -218,6 +219,23 @@ class Motor:
         return max(M, 0)
 
     def runSimulation(self, callback=None) -> SimulationResult:
+        """Runs a simulation of the motor and returns a simRes instance with the results.
+
+        Any axially-tapered grain (see motorlib.taper) is expanded into a stack
+        of normal sub-grains for the duration of the run, then the authored
+        grain list is restored — so the data model / GUI keep one object per
+        taper while the QS solver sees a regular multi-grain motor."""
+        authoredGrains = self.grains
+        if any(grain.isTapered() for grain in self.grains):
+            sliceMapDim = min(taper.DEFAULT_SLICE_MAP_DIM,
+                              self.config.getProperty("mapDim"))
+            self.grains = taper.expand_motor_grains(self.grains, map_dim=sliceMapDim)
+        try:
+            return self._runSimulation(callback)
+        finally:
+            self.grains = authoredGrains
+
+    def _runSimulation(self, callback=None) -> SimulationResult:
         """Runs a simulation of the motor and returns a simRes instance with the results. Constraints are checked,
         including the number of grains, if the motor has a propellant set, and if the grains have geometry errors. If
         all of these tests are passed, the motor's operation is simulated by calculating Kn, using this value to get
@@ -279,9 +297,18 @@ class Motor:
         # Precalculate these are they don't change
         motorVolume = self.calcTotalVolume()
 
-        # Generate coremaps for perforated grains
+        # Generate coremaps for perforated grains. Taper sub-grains carry a
+        # reduced FMM mapDim (`_sim_map_dim`, set by the expander) to keep the
+        # O(mapDim^2) setup affordable; apply it for just that grain's setup.
+        savedMapDim = self.config.getProperty("mapDim")
         for grain in self.grains:
-            grain.simulationSetup(self.config)
+            sliceMapDim = getattr(grain, "_sim_map_dim", None)
+            if sliceMapDim is not None:
+                self.config.setProperty("mapDim", min(sliceMapDim, savedMapDim))
+                grain.simulationSetup(self.config)
+                self.config.setProperty("mapDim", savedMapDim)
+            else:
+                grain.simulationSetup(self.config)
 
         # Setup initial values
         perGrainReg = [0 for grain in self.grains]
