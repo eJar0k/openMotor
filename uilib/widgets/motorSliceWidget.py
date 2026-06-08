@@ -278,6 +278,12 @@ class MotorSliceWidget(FigureCanvas):
     def _rebuildStatic(self):
         """Build the axes + (pinned) colorbar once per field/data change."""
         self.figure.clear()
+        # constrained_layout re-fits labels/colorbar/title on every resize, so
+        # axis labels don't clip when the window is shrunk (tight_layout did).
+        try:
+            self.figure.set_constrained_layout(True)
+        except Exception:
+            pass
         self._artists = ()
         self._markers = []
         self.ax = self.figure.add_subplot(111)
@@ -313,12 +319,7 @@ class MotorSliceWidget(FigureCanvas):
             fontsize='small', zorder=10, visible=False, color=theme['fg'],
             bbox=dict(boxstyle='round', fc=theme['bg'], ec=theme['ec'],
                       alpha=0.96, linewidth=0.8))
-        # Reserve title headroom BEFORE per-frame set_title so it isn't clipped.
-        self.ax.set_title('t = 0.000 s', fontsize='medium')
-        try:
-            self.figure.tight_layout()
-        except Exception:
-            pass
+        self.ax.set_title('t = 0.000 s', fontsize='medium')   # constrained_layout fits it
         self._drawStations()   # markers survive field changes (figure was cleared)
 
     def _drawFrame(self):
