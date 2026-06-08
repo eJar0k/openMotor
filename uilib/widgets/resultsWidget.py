@@ -6,11 +6,9 @@ import motorlib
 from motorlib.simResult import singleValueChannels, multiValueChannels, alertLevelNames, alertTypeNames
 from motorlib.constants import standardGravity
 
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
-
 from .grainImageWidget import GrainImageWidget
 from .stationSelector import StationSelector
-from .motorSliceWidget import MotorSliceWidget, SLICE_FIELDS
+from .motorSliceWidget import MotorSliceWidget, SliceNavToolbar, SLICE_FIELDS
 
 from ..views.ResultsWidget_ui import Ui_ResultsWidget
 
@@ -91,9 +89,9 @@ class ResultsWidget(QWidget):
         self.sliceLabelsCheck = QCheckBox('Station labels')
         self.sliceLabelsCheck.setChecked(True)
         self.sliceLabelsCheck.toggled.connect(self.motorSliceWidget.setLabelsVisible)
-        self.sliceWebCheck = QCheckBox('Web shade')
-        self.sliceWebCheck.setChecked(False)
-        self.sliceWebCheck.toggled.connect(self.motorSliceWidget.setWebShade)
+        self.sliceOriginalCheck = QCheckBox('Original profile')
+        self.sliceOriginalCheck.setChecked(False)
+        self.sliceOriginalCheck.toggled.connect(self.motorSliceWidget.setShowOriginal)
         self.sliceScaleCheck = QCheckBox('True scale')
         self.sliceScaleCheck.setChecked(False)
         self.sliceScaleCheck.toggled.connect(self.motorSliceWidget.setTrueScale)
@@ -104,14 +102,14 @@ class ResultsWidget(QWidget):
         sliceBar.addWidget(self.sliceStationsCheck)
         sliceBar.addWidget(self.sliceLabelsCheck)
         sliceBar.addSpacing(16)
-        sliceBar.addWidget(self.sliceWebCheck)
+        sliceBar.addWidget(self.sliceOriginalCheck)
         sliceBar.addWidget(self.sliceScaleCheck)
         sliceBar.addStretch(1)
         self._sliceBarWidget = QWidget()
         self._sliceBarWidget.setLayout(sliceBar)
         # Nav toolbar (zoom/pan/home/save) — makes the 1:1 'True scale' view
         # usable on a long/thin motor; scrubbing preserves the zoom.
-        self.sliceToolbar = NavigationToolbar2QT(self.motorSliceWidget, self)
+        self.sliceToolbar = SliceNavToolbar(self.motorSliceWidget, self)
         self.ui.verticalLayout.insertWidget(0, self.motorSliceWidget, stretch=1)
         self.ui.verticalLayout.insertWidget(0, self.sliceToolbar)
         self.ui.verticalLayout.insertWidget(0, self._sliceBarWidget)
