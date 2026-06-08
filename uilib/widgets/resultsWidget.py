@@ -6,6 +6,8 @@ import motorlib
 from motorlib.simResult import singleValueChannels, multiValueChannels, alertLevelNames, alertTypeNames
 from motorlib.constants import standardGravity
 
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+
 from .grainImageWidget import GrainImageWidget
 from .stationSelector import StationSelector
 from .motorSliceWidget import MotorSliceWidget, SLICE_FIELDS
@@ -89,17 +91,31 @@ class ResultsWidget(QWidget):
         self.sliceLabelsCheck = QCheckBox('Station labels')
         self.sliceLabelsCheck.setChecked(True)
         self.sliceLabelsCheck.toggled.connect(self.motorSliceWidget.setLabelsVisible)
+        self.sliceWebCheck = QCheckBox('Web shade')
+        self.sliceWebCheck.setChecked(False)
+        self.sliceWebCheck.toggled.connect(self.motorSliceWidget.setWebShade)
+        self.sliceScaleCheck = QCheckBox('True scale')
+        self.sliceScaleCheck.setChecked(False)
+        self.sliceScaleCheck.toggled.connect(self.motorSliceWidget.setTrueScale)
         sliceBar = QHBoxLayout()
         sliceBar.addWidget(QLabel('Bore field:'))
         sliceBar.addWidget(self.sliceFieldCombo)
         sliceBar.addSpacing(16)
         sliceBar.addWidget(self.sliceStationsCheck)
         sliceBar.addWidget(self.sliceLabelsCheck)
+        sliceBar.addSpacing(16)
+        sliceBar.addWidget(self.sliceWebCheck)
+        sliceBar.addWidget(self.sliceScaleCheck)
         sliceBar.addStretch(1)
         self._sliceBarWidget = QWidget()
         self._sliceBarWidget.setLayout(sliceBar)
+        # Nav toolbar (zoom/pan/home/save) — makes the 1:1 'True scale' view
+        # usable on a long/thin motor; scrubbing preserves the zoom.
+        self.sliceToolbar = NavigationToolbar2QT(self.motorSliceWidget, self)
         self.ui.verticalLayout.insertWidget(0, self.motorSliceWidget, stretch=1)
+        self.ui.verticalLayout.insertWidget(0, self.sliceToolbar)
         self.ui.verticalLayout.insertWidget(0, self._sliceBarWidget)
+        self.sliceToolbar.setVisible(False)
         self._sliceBarWidget.setVisible(False)
         self.motorSliceWidget.setVisible(False)
 
@@ -175,6 +191,7 @@ class ResultsWidget(QWidget):
             self.stationSelector.setup(self._axial)
             # Longitudinal motor-slice viewer on (Grains tab).
             self._sliceBarWidget.setVisible(True)
+            self.sliceToolbar.setVisible(True)
             self.motorSliceWidget.setVisible(True)
             self.motorSliceWidget.setData(self._axial)
             self.motorSliceWidget.setStations(self.stationSelector.getSelectedStations())
@@ -187,6 +204,7 @@ class ResultsWidget(QWidget):
             self.ui.grainSelector.setVisible(True)
             self.setupGrainChecks(len(self.simResult.motor.grains), True)
             self._sliceBarWidget.setVisible(False)
+            self.sliceToolbar.setVisible(False)
             self.motorSliceWidget.setVisible(False)
             self.motorSliceWidget.setData(None)
 
@@ -398,6 +416,7 @@ class ResultsWidget(QWidget):
         self.stationSelector.clear()
         self.ui.widgetGraph.resetPlot()
         self._sliceBarWidget.setVisible(False)
+        self.sliceToolbar.setVisible(False)
         self.motorSliceWidget.setVisible(False)
         self.motorSliceWidget.setData(None)
         self.cleanupGrainTab()

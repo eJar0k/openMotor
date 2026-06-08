@@ -24,6 +24,7 @@ rendering / previews; ``MotorSliceWidget`` wraps the interactive path.
 import numpy as np
 import matplotlib.cm as cm
 from matplotlib.colors import Normalize
+from matplotlib.collections import PolyCollection
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt6.QtWidgets import QApplication
@@ -97,8 +98,15 @@ def _bore_geometry(axial, frame, lengthScale):
     return edges, Ro, Rb_edge
 
 
+def _web_grey(wf):
+    """Grayscale for the propellant by remaining-web fraction: full web (1) ->
+    darker, nearly burned (0) -> lighter. Wide range so burn progress reads."""
+    g = 0.90 - 0.38 * float(np.clip(wf, 0.0, 1.0))
+    return (g, g, g)
+
+
 def _draw_frame_artists(ax, axial, frame, field, *, cmap, norm,
-                        lengthScale=1.0, fieldScale=1.0):
+                        lengthScale=1.0, fieldScale=1.0, web_shade=False):
     """Draw the per-frame artists and return them (so the scrub path can
     ``.remove()`` them next frame).
 
@@ -125,11 +133,60 @@ def _draw_frame_artists(ax, axial, frame, field, *, cmap, norm,
     D_port = np.asarray(axial['fields']['D_port'][frame], float)
     Rb_cell = np.clip(0.5 * D_port * lengthScale, 0.0, Ro)
 
-    def _solid(xseg, rb):
-        artists.append(ax.fill_between(xseg, rb, Ro, color=_PROPELLANT,
-                                       edgecolor=_STROKE, linewidth=0.6, zorder=2))
-        artists.append(ax.fill_between(xseg, -Ro, -rb, color=_PROPELLANT,
-                                       edgecolor=_STROKE, linewidth=0.6, zorder=2))
+    # %web-remaining per cell (for shading), if the geometry is carried.
+    webfrac = None
+    if web_shade:
+        wa = axial.get('cell_wall_web')
+        if wa is not None and len(wa) == x.size:
+            wa = np.asarray(wa, float)
+            reg = np.asarray(axial['fields']['regress'][frame], float)
+            webfrac = np.where(wa > 1e-12,
+                               np.clip(1.0 - reg / np.maximum(wa, 1e-12), 0.0, 1.0), 0.0)
+
+    def _draw_segment(inside, x_fwd, x_aft):
+        """Draw one grain segment's solid over [x_fwd, x_aft]. The bore wall is
+        interpolated at the exact faces (smooth, no per-cell snapping); when
+        web_shade is on, the annulus is per-cell grayscale by %web with a
+        single continuous outline (no per-cell grid strokes)."""
+        centers = x[inside]
+        rb_in = Rb_cell[inside]
+
+        def rb_at(xq):
+            return float(np.interp(xq, centers, rb_in))
+
+        mids = [float(c) for c in centers if x_fwd < c < x_aft]
+        xpath = np.array([x_fwd] + mids + [x_aft])
+        rbpath = np.array([rb_at(xv) for xv in xpath])
+
+        if webfrac is None:
+            artists.append(ax.fill_between(xpath, rbpath, Ro, color=_PROPELLANT,
+                                           edgecolor=_STROKE, linewidth=0.6, zorder=2))
+            artists.append(ax.fill_between(xpath, -Ro, -rbpath, color=_PROPELLANT,
+                                           edgecolor=_STROKE, linewidth=0.6, zorder=2))
+            return
+        # Per-cell grayscale quads (bore wall interpolated at the cell edges so
+        # the inner boundary stays continuous across cells), top + bottom.
+        polys, colors = [], []
+        for i in inside:
+            xl = max(edges[i], x_fwd)
+            xr = min(edges[i + 1], x_aft)
+            if xr <= xl:
+                continue
+            rl, rr = rb_at(xl), rb_at(xr)
+            g = _web_grey(webfrac[i])
+            polys.append([(xl, rl), (xr, rr), (xr, Ro), (xl, Ro)])
+            colors.append(g)
+            polys.append([(xl, -rl), (xr, -rr), (xr, -Ro), (xl, -Ro)])
+            colors.append(g)
+        if polys:
+            pc = PolyCollection(polys, facecolors=colors, edgecolors='none', zorder=2)
+            ax.add_collection(pc)
+            artists.append(pc)
+        # One continuous outline per segment (top + mirrored bottom).
+        ox = list(xpath) + [x_aft, x_fwd, x_fwd]
+        oy = list(rbpath) + [Ro, Ro, rbpath[0]]
+        artists.append(ax.plot(ox, oy, color=_STROKE, lw=0.6, zorder=3)[0])
+        artists.append(ax.plot(ox, [-v for v in oy], color=_STROKE, lw=0.6, zorder=3)[0])
 
     sg = axial.get('seg_geom')
     if sg is not None and len(sg.get('seg_x_start', ())):
@@ -142,42 +199,49 @@ def _draw_frame_artists(ax, axial, frame, field, *, cmap, norm,
             x_aft = (x0[k] + L[k] - ar[k]) * lengthScale
             if x_aft - x_fwd <= 1e-9:
                 continue                         # segment fully consumed
-            inside = np.where((x >= x_fwd) & (x <= x_aft))[0]
+            # Edge-OVERLAP selection: includes the partially-consumed boundary
+            # cells (smooth face) and never empties for a thin sub-cell segment.
+            inside = np.where((edges[1:] > x_fwd) & (edges[:-1] < x_aft))[0]
             if inside.size == 0:
-                continue                         # sub-cell segment (deferred)
-            xseg = np.concatenate([[x_fwd], x[inside], [x_aft]])
-            rb = np.concatenate([[Rb_cell[inside[0]]], Rb_cell[inside],
-                                 [Rb_cell[inside[-1]]]])
-            _solid(xseg, rb)
+                continue
+            _draw_segment(inside, x_fwd, x_aft)
     else:
         # Fallback (results without seg_geom): static cell map, radial only.
         seg = np.asarray(axial['cell_segment_id'])
         Rb = Rb_cell.copy()
         Rb[seg < 0] = Ro
-        _solid(edges, np.clip(_to_edge_values(Rb), 0.0, Ro))
+        rb_edge = np.clip(_to_edge_values(Rb), 0.0, Ro)
+        artists.append(ax.fill_between(edges, rb_edge, Ro, color=_PROPELLANT,
+                                       edgecolor=_STROKE, linewidth=0.6, zorder=2))
+        artists.append(ax.fill_between(edges, -Ro, -rb_edge, color=_PROPELLANT,
+                                       edgecolor=_STROKE, linewidth=0.6, zorder=2))
     return tuple(artists)
 
 
-def _style_axes(ax, edges, Ro, lengthLabel):
+def _style_axes(ax, edges, Ro, lengthLabel, aspect='auto'):
     ax.plot([edges[0], edges[-1]], [Ro, Ro], color=_CASING, lw=1.2, zorder=3)
     ax.plot([edges[0], edges[-1]], [-Ro, -Ro], color=_CASING, lw=1.2, zorder=3)
     ax.set_xlim(edges[0], edges[-1])
     ax.set_ylim(-Ro * 1.02, Ro * 1.02)
-    ax.set_aspect('auto')
+    # 'auto' = stretch radius to fill the pane (default); 'equal' = true 1:1
+    # scale (thin strip — use the nav toolbar to zoom/pan).
+    ax.set_aspect(aspect)
     ax.set_xlabel('Axial position - {}'.format(lengthLabel))
     ax.set_ylabel('Radius - {}'.format(lengthLabel))
 
 
 def renderMotorSlice(ax, axial, frame, field, *, fieldLabel='', fieldUnit='',
                      lengthScale=1.0, lengthLabel='m', cmap=_CMAP,
-                     vmin=None, vmax=None, fieldScale=1.0, colorbar=True):
+                     vmin=None, vmax=None, fieldScale=1.0, colorbar=True,
+                     aspect='auto', web_shade=False):
     """Full one-shot render on Axes ``ax`` (headless previews / tests)."""
     ax.clear()
     norm = Normalize(vmin=vmin, vmax=vmax) if (vmin is not None and vmax is not None) else None
     mesh = _draw_frame_artists(ax, axial, frame, field, cmap=cmap, norm=norm,
-                               lengthScale=lengthScale, fieldScale=fieldScale)[0]
+                               lengthScale=lengthScale, fieldScale=fieldScale,
+                               web_shade=web_shade)[0]
     edges, Ro, _ = _bore_geometry(axial, frame, lengthScale)
-    _style_axes(ax, edges, Ro, lengthLabel)
+    _style_axes(ax, edges, Ro, lengthLabel, aspect=aspect)
     ax.set_title('Motor slice @ t = {:.3f} s'.format(float(axial['snap_times'][frame])),
                  fontsize='medium')
     if colorbar:
@@ -206,6 +270,8 @@ class MotorSliceWidget(FigureCanvas):
         self._markers = []           # station marker artists (band+line+label)
         self._stationsVisible = True # master station-marker toggle
         self._labelsVisible = True   # station-label sub-toggle
+        self._trueScale = False      # False=auto-stretch radial, True=1:1
+        self._webShade = False       # shade propellant by %web remaining
         self._hover = None
         self._norm = None
         self._range_cache = {}      # field -> (vmin, vmax) in display units
@@ -243,6 +309,17 @@ class MotorSliceWidget(FigureCanvas):
         label). Markers are at fixed x, so this is independent of the frame."""
         self._stations = list(stations or [])
         self._drawStations()
+
+    def setTrueScale(self, on):
+        """Toggle 1:1 (true-scale) vs auto-stretched radial axis."""
+        self._trueScale = bool(on)
+        self._rebuildStatic()
+        self._drawFrame()
+
+    def setWebShade(self, on):
+        """Toggle %web-remaining grayscale shading of the propellant."""
+        self._webShade = bool(on)
+        self._drawFrame()
 
     def setStationsVisible(self, visible):
         """Master toggle for all station markers (band + line + label)."""
@@ -303,7 +380,8 @@ class MotorSliceWidget(FigureCanvas):
         self._norm = Normalize(vmin=vmin, vmax=vmax)
 
         edges, Ro, _ = _bore_geometry(self.axial, self.frame, self._lenScale)
-        _style_axes(self.ax, edges, Ro, self._lenUnit)
+        _style_axes(self.ax, edges, Ro, self._lenUnit,
+                    aspect=('equal' if self._trueScale else 'auto'))
 
         sm = cm.ScalarMappable(norm=self._norm, cmap=_CMAP)
         sm.set_array([])
@@ -332,7 +410,8 @@ class MotorSliceWidget(FigureCanvas):
                 pass
         self._artists = _draw_frame_artists(
             self.ax, self.axial, self.frame, self._field, cmap=_CMAP,
-            norm=self._norm, lengthScale=self._lenScale, fieldScale=self._fieldScale)
+            norm=self._norm, lengthScale=self._lenScale, fieldScale=self._fieldScale,
+            web_shade=self._webShade)
         self.ax.set_title('t = {:.3f} s'.format(
             float(self.axial['snap_times'][self.frame])), fontsize='medium')
         self.draw_idle()
