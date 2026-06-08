@@ -128,6 +128,13 @@ class SimulationResult:
 
     def __init__(self, motor):
         self.motor = motor
+        # The grain list as the simulation saw it. For a tapered motor this is
+        # the expanded sub-grain stack (set up + burned during the run), so
+        # per-grain getters reflect the real sliced geometry — e.g. the
+        # port/throat ratio uses the aft-most slice adjacent to the throat.
+        # The motor restores its authored grain list after the run, so capture
+        # this reference now (at construction, mid-run).
+        self.grains = motor.grains
 
         self.alerts: List[SimAlert] = []
         self.success = False
@@ -275,7 +282,7 @@ class SimulationResult:
 
     def getPortRatio(self):
         """Returns the port/throat ratio of the motor, or None if it doesn't have a port."""
-        aftPort = self.motor.grains[-1].getPortArea(0)
+        aftPort = self.grains[-1].getPortArea(0)
         if aftPort is not None:
             return aftPort / geometry.circleArea(
                 self.motor.nozzle.props["throat"].getValue()
@@ -284,11 +291,11 @@ class SimulationResult:
 
     def getPropellantLength(self):
         """Returns the total length of all propellant before the simulated burn."""
-        return sum([g.props["length"].getValue() for g in self.motor.grains])
+        return sum([g.props["length"].getValue() for g in self.grains])
 
     def getMaxPropellantDiameter(self):
         """Returns the outer diameter of the largest-diameter propellant grain."""
-        return max([g.props["diameter"].getValue() for g in self.motor.grains])
+        return max([g.props["diameter"].getValue() for g in self.grains])
 
     def getPropellantMass(self, index=0):
         """Returns the total mass of all propellant before the simulated burn. Optionally accepts a index that the mass

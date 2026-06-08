@@ -22,12 +22,33 @@ class GrainPreviewWidget(QWidget):
 
         # Used to navigate back to the tab the user was on after they clear alerts
         self.lastNonAlertTab = 1
+        # Set while previewing a tapered grain so the area tab shows the
+        # slice-averaged burn area instead of one face's.
+        self._taperedGrain = None
 
         self.ui.tabWidget.currentChanged.connect(self.onTabChanged)
 
         self.previewReady.connect(self.updateView)
 
-    def loadGrain(self, grain):
+    def _sideGrain(self, grain, side):
+        """A plain grain for the chosen taper end's cross-section (face /
+        regression images): the base/forward props, or the aft overrides."""
+        sub = type(grain)()
+        props = {k: v for k, v in grain.getProperties().items() if k != 'taper'}
+        if side == 'Aft':
+            props.update(motorlib.taper.aft_props_from_grain(grain))
+        sub.setProperties(props)
+        return sub
+
+    def loadGrain(self, grain, previewSide='Forward'):
+        # For a tapered grain, draw the selected end's cross-section but show
+        # the slice-averaged burn area on the area tab.
+        if grain.isTapered():
+            self._taperedGrain = grain
+            grain = self._sideGrain(grain, previewSide)
+        else:
+            self._taperedGrain = None
+
         geomAlerts = grain.getGeometryErrors()
 
         self.ui.tabAlerts.clear()
@@ -53,6 +74,11 @@ class GrainPreviewWidget(QWidget):
 
     def _genData(self, grain):
         out = grain.getRegressionData(250, coreBlack=False)
+        if self._taperedGrain is not None:
+            # Replace the single-face area curve with the slice-averaged one.
+            coreIm, regImage, contours, _ = out
+            avg = motorlib.taper.averaged_area_curve(self._taperedGrain, map_dim=250)
+            out = (coreIm, regImage, contours, avg)
         self.previewReady.emit(out)
 
     def updateView(self, data):

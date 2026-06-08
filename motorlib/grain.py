@@ -28,6 +28,10 @@ class Grain(PropertyCollection):
     """
 
     geomName: Union[str, None] = None
+    # Whether this grain type supports an axial taper. Conical grains are
+    # already an axial bore taper, so they opt out (a tapered BATES covers
+    # that case); end burners have no core to taper.
+    isTaperable: bool = True
 
     def __init__(self) -> None:
         super().__init__()
@@ -53,7 +57,12 @@ class Grain(PropertyCollection):
         self.props["taper"] = TaperProperty("Axial taper")
 
     def isTapered(self) -> bool:
-        """True if this grain carries an enabled axial-taper definition."""
+        """True if this grain supports tapering and carries an enabled
+        axial-taper definition. Non-taperable grains (e.g. Conical) report
+        False even if a taper block is present, so the expander/adapter and
+        serialization ignore it."""
+        if not self.isTaperable:
+            return False
         taper = self.props["taper"].getValue()
         return isinstance(taper, dict) and bool(taper.get("enabled"))
 
@@ -62,12 +71,12 @@ class Grain(PropertyCollection):
         return self.props["taper"].getValue()
 
     def getProperties(self, props=None):
-        """Like PropertyCollection.getProperties, but omit a disabled taper so
-        non-tapered motors serialize byte-identically to pre-taper files. An
-        enabled taper is emitted normally and round-trips via applyDict."""
+        """Like PropertyCollection.getProperties, but omit the taper block
+        unless the grain is actually tapered (enabled AND taperable). This
+        keeps non-tapered / non-taperable motors serializing byte-identically
+        to pre-taper files. An active taper round-trips via applyDict."""
         result = super().getProperties(props)
-        taper = result.get("taper")
-        if taper is not None and not (isinstance(taper, dict) and taper.get("enabled")):
+        if "taper" in result and not self.isTapered():
             del result["taper"]
         return result
 

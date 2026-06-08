@@ -6,6 +6,7 @@ from ..import geometry
 class EndBurningGrain(Grain):
     """Defines an end-burning grain, which is a simple cylinder that burns on one end."""
     geomName = 'End Burner'
+    isTaperable = False  # no core to taper
 
     def getSurfaceAreaAtRegression(self, regDist):
         diameter = self.props['diameter'].getValue()

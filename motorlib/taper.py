@@ -32,17 +32,100 @@ probe: skfmm setup is O(mapDim**2) and dominates, so sub-grains use a reduced
 mapDim, and N tracks L/D with a conservative cap.
 """
 
-# QS discretization defaults (from the Phase-0 cost probe).
+# QS discretization defaults (from the Phase-0 cost probe). The slice count is
+# N ~ clamp(round(k*L/D), MIN, MAX). The floor was raised from 3 -> 8 because
+# short (low-L/D) tapers showed visible stepping in the thrust curve with only
+# a few slices; the QS config exposes an explicit override for finer control
+# (see MotorConfig 'taperSlices'). The per-slice mapDim is reduced because
+# skfmm setup is O(mapDim^2) and dominates.
 DEFAULT_SLICE_MAP_DIM = 500     # ~12x cheaper than 1001; fine for thin slices
 SLICE_COUNT_COEFF = 1.0         # N ~ k * L/D
-SLICE_COUNT_MIN = 3
-SLICE_COUNT_MAX = 12
+SLICE_COUNT_MIN = 8
+SLICE_COUNT_MAX = 16
 
 # Properties that cannot be linearly interpolated (must match across stations).
 _NON_INTERPOLABLE = {'numFins'}
 
 _INH_PAIR = {'Neither': (False, False), 'Top': (True, False),
              'Bottom': (False, True), 'Both': (True, True)}
+
+
+# Grain properties that the bore taper never varies: the axial length, the
+# outer diameter (reserved for the OD/end-taper phase), and the taper block
+# itself. Everything else that is a FloatProperty is a taperable cross-section
+# dimension (coreDiameter, finLength, finWidth, ...).
+_NON_BORE_TAPER_PROPS = {'length', 'diameter', 'taper'}
+
+
+def taperable_property_names(grain):
+    """Float cross-section property names a bore taper may vary (excludes the
+    axial length, the outer diameter, and the taper block). Used by the GUI to
+    decide which rows get a start|aft pair, and shared so QS/GUI agree."""
+    from .properties import FloatProperty
+    return [name for name, prop in grain.props.items()
+            if name not in _NON_BORE_TAPER_PROPS
+            and isinstance(prop, FloatProperty)]
+
+
+def build_bore_taper_def(aft_overrides, profile='linear'):
+    """Assemble an enabled bore-taper definition dict from the aft-end overrides
+    (``{prop: value}`` for only the properties that differ from the base/forward
+    cross-section). Start (frac 0) is implicit = the grain's base props."""
+    return {'enabled': True, 'bore': {
+        'profile': profile,
+        'controlStations': [{'frac': 1.0, 'props': dict(aft_overrides)}],
+    }}
+
+
+def aft_props_from_grain(grain):
+    """The aft-end value of every taperable property: the taper override where
+    one exists, else the base (forward) value. Used to populate the GUI's aft
+    column when (re)loading a grain."""
+    names = taperable_property_names(grain)
+    overrides = {}
+    taper = grain.getTaperDef()
+    if isinstance(taper, dict) and taper.get('enabled'):
+        bore = taper.get('bore', {}) or {}
+        stations = bore.get('controlStations', [])
+        if stations:
+            overrides = stations[-1].get('props', {}) or {}
+    return {name: overrides.get(name, grain.getProperty(name)) for name in names}
+
+
+def averaged_area_curve(grain, n_slices=None, map_dim=250, n_points=24):
+    """Mean burning-perimeter-vs-regression over a tapered grain's slices.
+
+    The grain-preview area graph plots burning perimeter (∝ burn area per unit
+    length). For a tapered grain a single face misrepresents the whole grain;
+    this samples every slice's perimeter on a common regression axis and
+    averages (slices have equal length, so the mean is the representative
+    per-unit-length curve; burnt-out slices contribute 0). Returns a
+    ``{regression: mean_perimeter}`` dict matching the single-grain area graph.
+
+    Uses ``getCorePerimeter`` (contour length only), so it works with srm_1d's
+    pure-Python find_perimeter shim as well as openMotor's Cython build.
+    """
+    import numpy as np
+
+    slices = expand_tapered_grain(grain, n_slices, map_dim=map_dim)
+    for sub in slices:
+        sub.initGeometry(map_dim)
+        sub.generateCoreMap()
+        sub.generateRegressionMap()
+
+    max_web = max(sub.wallWeb for sub in slices)
+    if max_web <= 0.0:
+        return {0.0: 0.0}
+
+    curve = {}
+    for reg in np.linspace(0.0, max_web, n_points):
+        total = 0.0
+        for sub in slices:
+            if reg < sub.wallWeb:
+                total += float(sub.getCorePerimeter(reg))
+            # else burnt out here -> contributes 0
+        curve[float(reg)] = total / len(slices)
+    return curve
 
 
 def _inh_pair(name):
@@ -177,11 +260,12 @@ def expand_tapered_grain(grain, n_slices=None, map_dim=DEFAULT_SLICE_MAP_DIM):
     return subgrains
 
 
-def expand_motor_grains(grains, map_dim=DEFAULT_SLICE_MAP_DIM):
+def expand_motor_grains(grains, map_dim=DEFAULT_SLICE_MAP_DIM, n_slices=None):
     """Expand every tapered grain in a list; pass non-tapered grains through.
-    The reduced ``map_dim`` is clamped to never exceed nothing here (the caller
-    clamps to the global config mapDim)."""
+    ``n_slices`` (>0) forces a fixed slice count for every tapered grain
+    (the QS config override); ``None`` uses the per-grain L/D heuristic. The
+    caller clamps ``map_dim`` to the global config mapDim."""
     out = []
     for grain in grains:
-        out.extend(expand_tapered_grain(grain, map_dim=map_dim))
+        out.extend(expand_tapered_grain(grain, n_slices=n_slices, map_dim=map_dim))
     return out

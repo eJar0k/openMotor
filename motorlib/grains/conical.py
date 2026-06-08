@@ -11,6 +11,9 @@ from ..constants import maximumRefDiameter
 class ConicalGrain(Grain):
     """A conical grain is similar to a BATES grain except it has different core diameters at each end."""
     geomName = "Conical"
+    # A conical grain is already an axial bore taper; don't offer tapering it
+    # (a tapered BATES covers that need).
+    isTaperable = False
     def __init__(self):
         super().__init__()
         self.props['forwardCoreDiameter'] = FloatProperty('Forward Core Diameter', 'm', 0, maximumRefDiameter)

@@ -1,11 +1,14 @@
 from PyQt6.QtWidgets import QLabel, QComboBox, QHBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QSizePolicy
 from PyQt6.QtCore import pyqtSignal
 
 import motorlib.grain
 import motorlib.nozzle
 import motorlib.motor
+import motorlib.taper
 
 from .collectionEditor import CollectionEditor
+from .propertyEditor import PropertyEditor
 from .grainPreviewWidget import GrainPreviewWidget
 from .nozzlePreviewWidget import NozzlePreviewWidget
 from .solverConfigController import SolverConfigController
@@ -66,6 +69,10 @@ class MotorEditor(CollectionEditor):
         self.configMotor = None     # set while editing the motor config
         self.controller = None
         self._pyrogenNames = []
+        # Axial-taper editor state (set only while editing a perforated grain).
+        # None signals "no taper controls active" so getProperties / preview
+        # leave non-grain objects untouched.
+        self._taperAftEditors = None
 
     # Igniter-chamber fields that only apply to one injection topology.
     _IGNITER_PLENUM_ONLY = ('throat_area', 'volume')
@@ -125,9 +132,36 @@ class MotorEditor(CollectionEditor):
             self.nozzlePreview.loadNozzle(nozzle)
 
         if issubclass(self.objType, motorlib.grain.PerforatedGrain):
+            # Build the grain from the current form (taper included); the
+            # preview renders the selected end's cross-section for the
+            # face/regression images and the slice-averaged burn area on the
+            # area tab.
             testGrain = self.objType()
             testGrain.setProperties(self.getProperties())
-            self.grainPreview.loadGrain(testGrain)
+            side = 'Forward'
+            if (self._taperAftEditors is not None
+                    and getattr(self, 'taperEnable', None) is not None
+                    and self.taperEnable.isChecked()):
+                side = self.taperPreviewSide.currentText()
+            self.grainPreview.loadGrain(testGrain, side)
+
+    def getProperties(self):
+        """Grain editing: fold the inline taper controls into the emitted
+        property dict (so it round-trips via setProperties). Emits an enabled
+        taper with only the aft values that differ from the start, or an
+        explicit ``{'enabled': False}`` so toggling off clears an existing
+        taper. No-op for non-grain objects."""
+        props = super().getProperties()
+        if self._taperAftEditors is not None and getattr(self, 'taperEnable', None) is not None:
+            if self.taperEnable.isChecked():
+                overrides = {name: ed.getValue()
+                             for name, ed in self._taperAftEditors.items()
+                             if name in props and ed.getValue() != props[name]}
+                props['taper'] = motorlib.taper.build_bore_taper_def(
+                    overrides, profile=self.taperProfile.currentText().lower())
+            else:
+                props['taper'] = {'enabled': False}
+        return props
 
     def loadObject(self, obj):
         self.configMotor = None
@@ -135,7 +169,10 @@ class MotorEditor(CollectionEditor):
         self.solverSelectorContainer.hide()
         self.pyrogenSelectorContainer.hide()
         self.objType = type(obj)
-        self.loadProperties(obj)
+        if issubclass(self.objType, motorlib.grain.PerforatedGrain):
+            self._loadGrainProperties(obj)
+        else:
+            self.loadProperties(obj)
 
         if issubclass(self.objType, motorlib.grain.PerforatedGrain):
             self.grainPreview.show()
@@ -152,6 +189,106 @@ class MotorEditor(CollectionEditor):
             self.expRatioLabel.hide()
             self.nozzlePreview.hide()
             self.grainPreview.hide()
+
+    def _loadGrainProperties(self, grain):
+        """Render a grain's property form with an inline axial-taper editor:
+        each taperable cross-section property gets a second 'aft' field beside
+        its start value, plus an enable checkbox, a Profile dropdown, and a
+        forward/aft preview toggle. The aft column / profile are shown only
+        when the taper is enabled (mirrors the igniter conditional-field
+        pattern). Taper assembly/parsing lives in motorlib.taper so it is
+        shared and headlessly testable."""
+        self.cleanup()
+
+        # Grains that opt out of tapering (e.g. Conical, already an axial bore
+        # taper) render as a plain property form.
+        if not getattr(grain, 'isTaperable', True):
+            self.loadProperties(grain)
+            return
+
+        self._taperAftEditors = {}
+
+        taperable = set(motorlib.taper.taperable_property_names(grain))
+        aftVals = motorlib.taper.aft_props_from_grain(grain)
+        taperDef = grain.getTaperDef()
+        enabled = bool(taperDef.get('enabled'))
+        profile = (taperDef.get('bore', {}) or {}).get('profile', 'linear')
+
+        for name, prop in grain.props.items():
+            if name == 'taper':
+                continue
+            startEd = PropertyEditor(self, prop, self.preferences)
+            startEd.valueChanged.connect(self.propertyUpdate)
+            self.propertyEditors[name] = startEd
+            label = QLabel('{}:'.format(prop.dispName))
+            label.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+            if name in taperable:
+                # Composite field: [ start | aft ].
+                aftProp = type(prop)(prop.dispName, prop.unit, prop.min, prop.max)
+                aftProp.setValue(aftVals.get(name, prop.getValue()))
+                aftEd = PropertyEditor(self, aftProp, self.preferences)
+                aftEd.valueChanged.connect(self.propertyUpdate)
+                self._taperAftEditors[name] = aftEd
+                field = QWidget()
+                row = QHBoxLayout(field)
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(4)
+                row.addWidget(startEd)
+                row.addWidget(aftEd)
+                self.form.addRow(label, field)
+            else:
+                self.form.addRow(label, startEd)
+
+        # Enable + Profile control row.
+        self.taperEnable = QCheckBox('Taper grain')
+        self.taperEnable.setChecked(enabled)
+        self.taperEnable.toggled.connect(self._taperToggled)
+        self.taperProfileLabel = QLabel('Profile:')
+        self.taperProfile = QComboBox()
+        self.taperProfile.addItems(['Linear'])
+        self.taperProfile.setCurrentText(profile.capitalize()
+                                         if profile.capitalize() in ('Linear',)
+                                         else 'Linear')
+        ctrl = QWidget()
+        crow = QHBoxLayout(ctrl)
+        crow.setContentsMargins(0, 0, 0, 0)
+        crow.addWidget(self.taperEnable)
+        crow.addSpacing(12)
+        crow.addWidget(self.taperProfileLabel)
+        crow.addWidget(self.taperProfile)
+        crow.addStretch()
+        self.form.addRow(QLabel('Axial taper:'), ctrl)
+
+        # Forward/aft preview toggle (drives which cross-section the 2-D grain
+        # preview renders; the results slice viewer shows the full axial taper).
+        self.taperPreviewSide = QComboBox()
+        self.taperPreviewSide.addItems(['Forward', 'Aft'])
+        self.taperPreviewSide.currentTextChanged.connect(self.propertyUpdate)
+        self.taperPreviewRow = QWidget()
+        prow = QHBoxLayout(self.taperPreviewRow)
+        prow.setContentsMargins(0, 0, 0, 0)
+        prow.addWidget(self.taperPreviewSide)
+        prow.addStretch()
+        self.form.addRow(QLabel('Preview end:'), self.taperPreviewRow)
+
+        self._taperToggled(enabled)
+        if self.buttons:
+            self.applyButton.show()
+            self.cancelButton.show()
+        self.propertyUpdate()
+
+    def _taperToggled(self, on):
+        """Show the aft column + profile + preview toggle only when the taper
+        is enabled."""
+        on = bool(on)
+        for editor in (self._taperAftEditors or {}).values():
+            editor.setVisible(on)
+        if hasattr(self, 'taperProfile'):
+            self.taperProfile.setVisible(on)
+            self.taperProfileLabel.setVisible(on)
+        if hasattr(self, 'taperPreviewRow'):
+            self.form.setRowVisible(self.taperPreviewRow, on)
+        self.propertyUpdate()
 
     def loadMotorConfig(self, motor, activeSolver, pyrogenNames=None):
         """Edit the motor's config (grain-table 'Config' row): the solver-aware
@@ -250,4 +387,7 @@ class MotorEditor(CollectionEditor):
         self.grainPreview.hide()
         self.nozzlePreview.hide()
         self.grainPreview.cleanup()
+        # Drop taper-editor state so getProperties / preview don't act on a
+        # stale grain after switching to a nozzle/config object.
+        self._taperAftEditors = None
         super().cleanup()

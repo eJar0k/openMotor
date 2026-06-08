@@ -53,6 +53,11 @@ class MotorConfig(PropertyCollection):
         self.props["sepPressureRatio"] = FloatProperty(
             "Separation Pressure Ratio", "", 0.001, 1
         )
+        # Axial slices per tapered grain in the quasi-steady solver. 0 = auto
+        # (an L/D-based heuristic, motorlib.taper). Raise it to smooth the
+        # stepping a short / low-L/D taper can show; each slice adds an FMM
+        # setup, so higher = slower. No effect on motors without tapered grains.
+        self.props["taperSlices"] = IntProperty("Taper Slices (0 = auto)", "", 0, 64)
 
 
 class Motor:
@@ -229,10 +234,17 @@ class Motor:
         if any(grain.isTapered() for grain in self.grains):
             sliceMapDim = min(taper.DEFAULT_SLICE_MAP_DIM,
                               self.config.getProperty("mapDim"))
-            self.grains = taper.expand_motor_grains(self.grains, map_dim=sliceMapDim)
+            # 0 = auto (L/D heuristic); >0 forces that many slices per taper.
+            nSlices = self.config.getProperty("taperSlices") or None
+            self.grains = taper.expand_motor_grains(
+                self.grains, map_dim=sliceMapDim, n_slices=nSlices)
         try:
             return self._runSimulation(callback)
         finally:
+            # Restore the authored grain list (one object per taper) for the
+            # data model / GUI. The SimulationResult captured the expanded
+            # sub-grain list during the run, so its per-grain getters still
+            # work (and reflect the real sliced geometry).
             self.grains = authoredGrains
 
     def _runSimulation(self, callback=None) -> SimulationResult:
