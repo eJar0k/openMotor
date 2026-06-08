@@ -81,48 +81,81 @@ def _to_edge_values(vals):
 
 
 def _bore_geometry(axial, frame, lengthScale):
-    """Return display-unit (edges, R_outer, Rb_edge, Rb_mesh) for ``frame``.
-
-    Rb_edge is the bore wall at cell edges; Rb_mesh extends a hair past it
-    (only where solid exists) so the propellant fill tucks onto the color
-    with no white seam.
-    """
+    """Display-unit (edges, R_outer, Rb_edge) for ``frame``. Rb_edge is the
+    per-cell bore wall at cell edges (open chamber where no grain) — used by
+    the hover region test."""
     x = np.asarray(axial['x_cell'], float)
     dx = float(axial['dx'])
     R_outer = 0.5 * float(axial['D_outer'])
     seg = np.asarray(axial['cell_segment_id'])
     D_port = np.asarray(axial['fields']['D_port'][frame], float)
-
     Rb = np.clip(0.5 * D_port, 0.0, R_outer)
-    Rb[seg < 0] = R_outer        # non-grain cells: open chamber, no solid
-
+    Rb[seg < 0] = R_outer
     Ro = R_outer * lengthScale
     edges = _edges_from_centers(x * lengthScale, dx * lengthScale)
     Rb_edge = np.clip(_to_edge_values(Rb * lengthScale), 0.0, Ro)
-    eps = 0.004 * Ro
-    Rb_mesh = np.where(Rb_edge < Ro - 1e-12, np.minimum(Rb_edge + eps, Ro), Rb_edge)
-    return edges, Ro, Rb_edge, Rb_mesh
+    return edges, Ro, Rb_edge
 
 
 def _draw_frame_artists(ax, axial, frame, field, *, cmap, norm,
                         lengthScale=1.0, fieldScale=1.0):
-    """Draw the per-frame artists (bore mesh + mirrored propellant fills).
+    """Draw the per-frame artists and return them (so the scrub path can
+    ``.remove()`` them next frame).
 
-    Returns ``(mesh, fillTop, fillBot)`` so a caller can ``.remove()`` them
-    on the next frame (the incremental scrub path).
+    The bore heatmap is a FULL-HEIGHT pcolormesh (±R_outer); the grey solid
+    propellant is then drawn OVER it. The solid is drawn per SEGMENT over its
+    live axial extent [x_fwd, x_aft] = [seg_x_start + fwd_reg, seg_x_start +
+    seg_length - aft_reg], so end-face burnback recedes the faces CONTINUOUSLY
+    (sub-cell, no whole-cell snapping) and each segment is a single polygon
+    (clean outline stroke, no per-cell grid lines). Where there's no solid
+    (gaps / consumed faces) the full-height field color shows = open chamber.
     """
-    edges, Ro, Rb_edge, Rb_mesh = _bore_geometry(axial, frame, lengthScale)
+    x = np.asarray(axial['x_cell'], float) * lengthScale
+    dx = float(axial['dx']) * lengthScale
+    Ro = 0.5 * float(axial['D_outer']) * lengthScale
+    edges = _edges_from_centers(x, dx)
     fieldVals = np.asarray(axial['fields'][field][frame], float) * fieldScale
 
     Xe = np.tile(edges, (2, 1))
-    Ye = np.vstack([-Rb_mesh, Rb_mesh])
+    Ye = np.vstack([np.full(edges.size, -Ro), np.full(edges.size, Ro)])
     mesh = ax.pcolormesh(Xe, Ye, fieldVals.reshape(1, -1), cmap=cmap, norm=norm,
                          shading='flat', zorder=1)
-    fillTop = ax.fill_between(edges, Rb_edge, Ro, color=_PROPELLANT,
-                              edgecolor=_STROKE, linewidth=0.6, zorder=2)
-    fillBot = ax.fill_between(edges, -Ro, -Rb_edge, color=_PROPELLANT,
-                              edgecolor=_STROKE, linewidth=0.6, zorder=2)
-    return mesh, fillTop, fillBot
+    artists = [mesh]
+
+    D_port = np.asarray(axial['fields']['D_port'][frame], float)
+    Rb_cell = np.clip(0.5 * D_port * lengthScale, 0.0, Ro)
+
+    def _solid(xseg, rb):
+        artists.append(ax.fill_between(xseg, rb, Ro, color=_PROPELLANT,
+                                       edgecolor=_STROKE, linewidth=0.6, zorder=2))
+        artists.append(ax.fill_between(xseg, -Ro, -rb, color=_PROPELLANT,
+                                       edgecolor=_STROKE, linewidth=0.6, zorder=2))
+
+    sg = axial.get('seg_geom')
+    if sg is not None and len(sg.get('seg_x_start', ())):
+        x0 = np.asarray(sg['seg_x_start'], float)
+        L = np.asarray(sg['seg_length'], float)
+        fr = np.asarray(sg['seg_fwd_reg'])[frame]
+        ar = np.asarray(sg['seg_aft_reg'])[frame]
+        for k in range(x0.size):
+            x_fwd = (x0[k] + fr[k]) * lengthScale
+            x_aft = (x0[k] + L[k] - ar[k]) * lengthScale
+            if x_aft - x_fwd <= 1e-9:
+                continue                         # segment fully consumed
+            inside = np.where((x >= x_fwd) & (x <= x_aft))[0]
+            if inside.size == 0:
+                continue                         # sub-cell segment (deferred)
+            xseg = np.concatenate([[x_fwd], x[inside], [x_aft]])
+            rb = np.concatenate([[Rb_cell[inside[0]]], Rb_cell[inside],
+                                 [Rb_cell[inside[-1]]]])
+            _solid(xseg, rb)
+    else:
+        # Fallback (results without seg_geom): static cell map, radial only.
+        seg = np.asarray(axial['cell_segment_id'])
+        Rb = Rb_cell.copy()
+        Rb[seg < 0] = Ro
+        _solid(edges, np.clip(_to_edge_values(Rb), 0.0, Ro))
+    return tuple(artists)
 
 
 def _style_axes(ax, edges, Ro, lengthLabel):
@@ -141,9 +174,9 @@ def renderMotorSlice(ax, axial, frame, field, *, fieldLabel='', fieldUnit='',
     """Full one-shot render on Axes ``ax`` (headless previews / tests)."""
     ax.clear()
     norm = Normalize(vmin=vmin, vmax=vmax) if (vmin is not None and vmax is not None) else None
-    mesh, _, _ = _draw_frame_artists(ax, axial, frame, field, cmap=cmap, norm=norm,
-                                     lengthScale=lengthScale, fieldScale=fieldScale)
-    edges, Ro, _, _ = _bore_geometry(axial, frame, lengthScale)
+    mesh = _draw_frame_artists(ax, axial, frame, field, cmap=cmap, norm=norm,
+                               lengthScale=lengthScale, fieldScale=fieldScale)[0]
+    edges, Ro, _ = _bore_geometry(axial, frame, lengthScale)
     _style_axes(ax, edges, Ro, lengthLabel)
     ax.set_title('Motor slice @ t = {:.3f} s'.format(float(axial['snap_times'][frame])),
                  fontsize='medium')
@@ -263,7 +296,7 @@ class MotorSliceWidget(FigureCanvas):
         vmin, vmax = self._fieldRange(self._field, self._fieldScale)
         self._norm = Normalize(vmin=vmin, vmax=vmax)
 
-        edges, Ro, _, _ = _bore_geometry(self.axial, self.frame, self._lenScale)
+        edges, Ro, _ = _bore_geometry(self.axial, self.frame, self._lenScale)
         _style_axes(self.ax, edges, Ro, self._lenUnit)
 
         sm = cm.ScalarMappable(norm=self._norm, cmap=_CMAP)
@@ -365,7 +398,7 @@ class MotorSliceWidget(FigureCanvas):
             return
         x = np.asarray(self.axial['x_cell'], float) * self._lenScale
         i = int(np.argmin(np.abs(x - event.xdata)))
-        edges, Ro, Rb_edge, _ = _bore_geometry(self.axial, self.frame, self._lenScale)
+        edges, Ro, Rb_edge = _bore_geometry(self.axial, self.frame, self._lenScale)
         Rb_cell = 0.5 * (Rb_edge[i] + Rb_edge[i + 1])
         label = dict((k, l) for k, l, _u in SLICE_FIELDS).get(self._field, self._field)
         xmm = x[i]
