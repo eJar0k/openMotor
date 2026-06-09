@@ -26,6 +26,124 @@ def _bore_taper(props_at_aft):
             'controlStations': [{'frac': 1.0, 'props': props_at_aft}]}}
 
 
+def _od_taper(ends):
+    return {'enabled': False, 'od': {'enabled': True, 'ends': ends}}
+
+
+class TestOdProfile(unittest.TestCase):
+
+    def test_aft_linear(self):
+        ends = [{'end': 'aft', 'length': 0.1, 'endDiameter': 0.04, 'profile': 'linear'}]
+        f = lambda x: motorlib.taper.od_diameter_at(x, 0.2, 0.08, ends)
+        self.assertAlmostEqual(f(0.0), 0.08)      # outside the aft region
+        self.assertAlmostEqual(f(0.5), 0.08)      # region starts at 0.5
+        self.assertAlmostEqual(f(0.75), 0.06)     # halfway down the cone
+        self.assertAlmostEqual(f(1.0), 0.04)      # aft face
+
+    def test_fwd_elliptical_hemisphere(self):
+        ends = [{'end': 'fwd', 'length': 0.2, 'endDiameter': 0.0, 'profile': 'elliptical'}]
+        f = lambda x: motorlib.taper.od_diameter_at(x, 0.2, 0.08, ends)
+        self.assertAlmostEqual(f(0.0), 0.0)       # closes to a point (hemisphere)
+        self.assertAlmostEqual(f(1.0), 0.08)      # full at the aft end
+        self.assertTrue(0.0 < f(0.5) < 0.08)
+
+    def test_both_ends(self):
+        ends = [{'end': 'aft', 'length': 0.05, 'endDiameter': 0.05, 'profile': 'linear'},
+                {'end': 'fwd', 'length': 0.05, 'endDiameter': 0.06, 'profile': 'linear'}]
+        f = lambda x: motorlib.taper.od_diameter_at(x, 0.2, 0.08, ends)
+        self.assertAlmostEqual(f(0.5), 0.08)      # middle untouched
+        self.assertAlmostEqual(f(1.0), 0.05)      # aft
+        self.assertAlmostEqual(f(0.0), 0.06)      # fwd
+
+    def test_no_ends(self):
+        self.assertAlmostEqual(motorlib.taper.od_diameter_at(0.5, 0.2, 0.08, []), 0.08)
+
+    def test_companion_coupling_roundtrips(self):
+        d = motorlib.taper.od_end_diameter_from_angle(0.08, 0.05, 10.0)
+        self.assertAlmostEqual(
+            motorlib.taper.od_angle_from_end_diameter(0.08, 0.05, d), 10.0)
+        self.assertAlmostEqual(
+            motorlib.taper.od_end_diameter_from_fraction(0.08, 0.5), 0.04)
+        self.assertAlmostEqual(
+            motorlib.taper.od_fraction_from_end_diameter(0.08, 0.04), 0.5)
+
+
+class TestOdExpander(unittest.TestCase):
+
+    def test_aft_cone_diameter_and_inhibition(self):
+        g = _bates(core=0.02, length=0.2, diameter=0.08)
+        g.props['taper'].setValue(_od_taper(
+            [{'end': 'aft', 'length': 0.1, 'endDiameter': 0.04, 'profile': 'linear'}]))
+        self.assertTrue(g.isTapered())            # OD-only still tapered
+        subs = motorlib.taper.expand_tapered_grain(g, n_slices=8)
+        ds = [s.getProperty('diameter') for s in subs]
+        self.assertAlmostEqual(ds[0], 0.08)        # fwd half full
+        self.assertGreater(ds[0], ds[-1])          # shrinks toward the aft
+        self.assertEqual(subs[-1].getProperty('inhibitedEnds'), 'Both')  # aft bonded
+        self.assertEqual(subs[0].getProperty('inhibitedEnds'), 'Bottom')  # fwd still burns
+
+    def test_od_only_leaves_cross_section(self):
+        g = motorlib.grains.Finocyl()
+        g.setProperties({'diameter': 0.08, 'length': 0.2, 'coreDiameter': 0.02,
+                         'numFins': 6, 'finWidth': 0.005, 'finLength': 0.01,
+                         'inhibitedEnds': 'Neither'})
+        g.props['taper'].setValue(_od_taper(
+            [{'end': 'aft', 'length': 0.1, 'endDiameter': 0.05, 'profile': 'linear'}]))
+        subs = motorlib.taper.expand_tapered_grain(g, n_slices=6)
+        self.assertTrue(all(s.getProperty('finLength') == 0.01 for s in subs))
+        self.assertTrue(all(s.getProperty('coreDiameter') == 0.02 for s in subs))
+
+    def test_min_diameter_clamp(self):
+        g = _bates(core=0.02, length=0.2, diameter=0.08)
+        g.props['taper'].setValue(_od_taper(
+            [{'end': 'aft', 'length': 0.2, 'endDiameter': 0.0, 'profile': 'linear'}]))
+        subs = motorlib.taper.expand_tapered_grain(g, n_slices=8)
+        self.assertTrue(all(s.getProperty('diameter') >= 0.02 for s in subs))
+
+
+class TestOdQuasiSteady(unittest.TestCase):
+
+    def _motor(self, taper):
+        m = motorlib.motor.Motor()
+        m.propellant = _propellant()
+        m.config.setProperties({'timestep': 0.01, 'ambPressure': 101325.0,
+                                'burnoutWebThres': 0.0005, 'burnoutThrustThres': 0.1,
+                                'mapDim': 500, 'taperSlices': 6})
+        m.nozzle.setProperties({'throat': 0.012, 'exit': 0.03, 'efficiency': 0.85,
+                                'convAngle': 45.0, 'divAngle': 15.0, 'throatLength': 0})
+        g = motorlib.grains.Finocyl()
+        g.setProperties({'diameter': 0.08, 'length': 0.3, 'coreDiameter': 0.02,
+                         'numFins': 6, 'finWidth': 0.005, 'finLength': 0.01,
+                         'inhibitedEnds': 'Neither'})
+        if taper is not None:
+            g.props['taper'].setValue(taper)
+        m.grains.append(g)
+        return m
+
+    def test_aft_cone_runs(self):
+        m = self._motor(_od_taper(
+            [{'end': 'aft', 'length': 0.12, 'endDiameter': 0.05, 'profile': 'linear'}]))
+        res = m.runSimulation()
+        self.assertGreater(res.getBurnTime(), 0)
+        self.assertEqual(len(m.grains), 1)         # authored grain restored
+        self.assertIsNotNone(res.getPortRatio())
+
+    def test_fwd_dome_runs(self):
+        m = self._motor(_od_taper(
+            [{'end': 'fwd', 'length': 0.1, 'endDiameter': 0.03, 'profile': 'elliptical'}]))
+        res = m.runSimulation()
+        self.assertGreater(res.getBurnTime(), 0)
+
+    def test_od_taper_removes_propellant(self):
+        # An OD-shrinking taper removes propellant -> lower peak Kn/pressure
+        # than the untapered grain.
+        p_full = max(self._motor(None).runSimulation().channels['pressure'].getData())
+        p_od = max(self._motor(_od_taper(
+            [{'end': 'aft', 'length': 0.15, 'endDiameter': 0.05, 'profile': 'linear'}]
+            )).runSimulation().channels['pressure'].getData())
+        self.assertLess(p_od, p_full)
+
+
 class TestTaperProperty(unittest.TestCase):
 
     def test_default_disabled(self):

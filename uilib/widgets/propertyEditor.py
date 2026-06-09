@@ -92,6 +92,21 @@ class PropertyEditor(QWidget):
 
             self.layout().addWidget(self.editor)
 
+    def setValue(self, value):
+        """Programmatically set the editor's value (display units for Float/Int).
+        Inverse of getValue; used by coupled fields (e.g. the OD-taper
+        angle/end-diameter linkage)."""
+        if isinstance(self.prop, motorlib.properties.FloatProperty):
+            self.editor.setValue(motorlib.units.convert(value, self.prop.unit, self.dispUnit))
+        elif isinstance(self.prop, motorlib.properties.IntProperty):
+            self.editor.setValue(int(motorlib.units.convert(value, self.prop.unit, self.dispUnit)))
+        elif isinstance(self.prop, motorlib.properties.StringProperty):
+            self.editor.setText(str(value))
+        elif isinstance(self.prop, motorlib.properties.BooleanProperty):
+            self.editor.setChecked(bool(value))
+        elif isinstance(self.prop, motorlib.properties.EnumProperty):
+            self.editor.setCurrentText(value)
+
     def getValue(self):
         if isinstance(self.prop, motorlib.properties.FloatProperty):
             return motorlib.units.convert(self.editor.value(), self.dispUnit, self.prop.unit)

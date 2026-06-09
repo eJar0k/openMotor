@@ -57,14 +57,20 @@ class Grain(PropertyCollection):
         self.props["taper"] = TaperProperty("Axial taper")
 
     def isTapered(self) -> bool:
-        """True if this grain supports tapering and carries an enabled
-        axial-taper definition. Non-taperable grains (e.g. Conical) report
-        False even if a taper block is present, so the expander/adapter and
-        serialization ignore it."""
+        """True if this grain supports tapering and carries an enabled axial
+        taper — either a BORE taper (``taper['enabled']``) or an OD/end taper
+        (``taper['od']['enabled']``), which are independent. Non-taperable
+        grains (e.g. Conical) report False even if a taper block is present, so
+        the expander/adapter and serialization ignore it."""
         if not self.isTaperable:
             return False
         taper = self.props["taper"].getValue()
-        return isinstance(taper, dict) and bool(taper.get("enabled"))
+        if not isinstance(taper, dict):
+            return False
+        if taper.get("enabled"):                 # bore taper
+            return True
+        od = taper.get("od") or {}
+        return bool(od.get("enabled"))           # OD / end taper
 
     def getTaperDef(self) -> dict:
         """The axial-taper definition dict (``{'enabled': False}`` when off)."""

@@ -6,6 +6,7 @@ import motorlib.grain
 import motorlib.nozzle
 import motorlib.motor
 import motorlib.taper
+import motorlib.properties
 
 from .collectionEditor import CollectionEditor
 from .propertyEditor import PropertyEditor
@@ -73,6 +74,8 @@ class MotorEditor(CollectionEditor):
         # None signals "no taper controls active" so getProperties / preview
         # leave non-grain objects untouched.
         self._taperAftEditors = None
+        self._odWidgets = None       # OD/end-taper controls, per end ('fwd'/'aft')
+        self._odSyncing = False      # reentrancy guard for the coupled OD fields
 
     # Igniter-chamber fields that only apply to one injection topology.
     _IGNITER_PLENUM_ONLY = ('throat_area', 'volume')
@@ -157,11 +160,32 @@ class MotorEditor(CollectionEditor):
                 overrides = {name: ed.getValue()
                              for name, ed in self._taperAftEditors.items()
                              if name in props and ed.getValue() != props[name]}
-                props['taper'] = motorlib.taper.build_bore_taper_def(
+                taper = motorlib.taper.build_bore_taper_def(
                     overrides, profile=self.taperProfile.currentText().lower())
             else:
-                props['taper'] = {'enabled': False}
+                taper = {'enabled': False}
+            od_ends = self._odEnds()
+            if od_ends:
+                taper['od'] = {'enabled': True, 'ends': od_ends}
+            props['taper'] = taper
         return props
+
+    def setPreferences(self, pref):
+        super().setPreferences(pref)
+        # The grain preview's longitudinal OD view honors the length unit.
+        self.grainPreview.setPreferences(pref)
+
+    def _alignedCell(self, widget, left=5):
+        """Wrap a raw field widget (checkbox / combo) so its left edge and row
+        height match the PropertyEditor fields (5px content margins) — i.e. the
+        same placement as a vanilla BooleanProperty checkbox (e.g. Inverted
+        Fins), which sits ~2px left of the spinbox content."""
+        cell = QWidget()
+        lay = QHBoxLayout(cell)
+        lay.setContentsMargins(left, 5, 5, 5)
+        lay.addWidget(widget)
+        lay.addStretch()
+        return cell
 
     def loadObject(self, obj):
         self.configMotor = None
@@ -214,6 +238,22 @@ class MotorEditor(CollectionEditor):
         enabled = bool(taperDef.get('enabled'))
         profile = (taperDef.get('bore', {}) or {}).get('profile', 'linear')
 
+        # Column headers over the [ Forward port | Aft Port ] composite fields;
+        # shown only while the bore taper is enabled (toggled in _taperToggled).
+        self.taperColHeader = QWidget()
+        hrow = QHBoxLayout(self.taperColHeader)
+        hrow.setContentsMargins(0, 5, 5, 0)   # match the composite field (left=0)
+        hrow.setSpacing(4)
+        _fwdHdr = QLabel('Forward port')
+        _aftHdr = QLabel('Aft port')
+        # Both labels land ~3px right of their column's spinbox; the aft column
+        # sits ~4px further left, so it needs the larger indent to even out.
+        _fwdHdr.setIndent(8)
+        _aftHdr.setIndent(12)
+        hrow.addWidget(_fwdHdr, 1)
+        hrow.addWidget(_aftHdr, 1)
+        headerInserted = False
+
         for name, prop in grain.props.items():
             if name == 'taper':
                 continue
@@ -223,7 +263,10 @@ class MotorEditor(CollectionEditor):
             label = QLabel('{}:'.format(prop.dispName))
             label.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
             if name in taperable:
-                # Composite field: [ start | aft ].
+                if not headerInserted:           # directly above the first pair
+                    self.form.addRow(QLabel(''), self.taperColHeader)
+                    headerInserted = True
+                # Composite field: equal-width [ start | aft ] under the headers.
                 aftProp = type(prop)(prop.dispName, prop.unit, prop.min, prop.max)
                 aftProp.setValue(aftVals.get(name, prop.getValue()))
                 aftEd = PropertyEditor(self, aftProp, self.preferences)
@@ -233,8 +276,8 @@ class MotorEditor(CollectionEditor):
                 row = QHBoxLayout(field)
                 row.setContentsMargins(0, 0, 0, 0)
                 row.setSpacing(4)
-                row.addWidget(startEd)
-                row.addWidget(aftEd)
+                row.addWidget(startEd, 1)
+                row.addWidget(aftEd, 1)
                 self.form.addRow(label, field)
             else:
                 self.form.addRow(label, startEd)
@@ -251,7 +294,7 @@ class MotorEditor(CollectionEditor):
                                          else 'Linear')
         ctrl = QWidget()
         crow = QHBoxLayout(ctrl)
-        crow.setContentsMargins(0, 0, 0, 0)
+        crow.setContentsMargins(5, 5, 5, 5)   # match vanilla checkbox + row height
         crow.addWidget(self.taperEnable)
         crow.addSpacing(12)
         crow.addWidget(self.taperProfileLabel)
@@ -266,16 +309,163 @@ class MotorEditor(CollectionEditor):
         self.taperPreviewSide.currentTextChanged.connect(self.propertyUpdate)
         self.taperPreviewRow = QWidget()
         prow = QHBoxLayout(self.taperPreviewRow)
-        prow.setContentsMargins(0, 0, 0, 0)
+        prow.setContentsMargins(5, 5, 5, 5)   # align + match row height
         prow.addWidget(self.taperPreviewSide)
         prow.addStretch()
         self.form.addRow(QLabel('Preview end:'), self.taperPreviewRow)
 
+        self._buildOdControls(grain)
+
         self._taperToggled(enabled)
+        self._odToggled()
         if self.buttons:
             self.applyButton.show()
             self.cancelButton.show()
         self.propertyUpdate()
+
+    def _buildOdControls(self, grain):
+        """OD / end-taper section: a master enable, then per end (fwd/aft) a
+        profile + length + endDiameter + a profile-dependent companion (a
+        half-angle for Linear, an end fraction for Elliptical). The companion
+        couples live to endDiameter via motorlib.taper helpers."""
+        od_def = (grain.getTaperDef() or {}).get('od') or {}
+        ends_by = {e.get('end'): e for e in od_def.get('ends', [])
+                   if isinstance(e, dict)}
+        full_d = grain.getProperty('diameter') or 1.0
+        grain_len = grain.getProperty('length') or 1.0
+
+        # Indent the OD sub-rows under the section (a few px, two levels), so
+        # the hierarchy reads without leading-space hacks.
+        def _ind(text, px):
+            lbl = QLabel(text)
+            lbl.setIndent(px)
+            return lbl
+
+        self.odEnable = QCheckBox()
+        self.odEnable.setChecked(bool(od_def.get('enabled')))
+        self.odEnable.toggled.connect(lambda _on: self._odToggled())
+        self.form.addRow(QLabel('End taper (OD):'),
+                         self._alignedCell(self.odEnable))
+
+        def _fProp(name, unit, lo, hi, val):
+            p = motorlib.properties.FloatProperty(name, unit, lo, hi)
+            p.setValue(val)
+            return PropertyEditor(self, p, self.preferences)
+
+        self._odWidgets = {}
+        for end in ('fwd', 'aft'):
+            e = ends_by.get(end, {})
+            tag = 'Forward OD' if end == 'fwd' else 'Aft OD'
+
+            enable = QCheckBox()
+            enable.setChecked(bool(e))
+            enable.toggled.connect(lambda _on: self._odToggled())
+            enableCell = self._alignedCell(enable)
+
+            profile = QComboBox()
+            profile.addItems(['Linear', 'Elliptical'])
+            prof = str(e.get('profile', 'linear')).capitalize()
+            profile.setCurrentText(prof if prof in ('Linear', 'Elliptical') else 'Linear')
+            profileCell = self._alignedCell(profile)
+
+            lengthEd = _fProp('Length', 'm', 0.0, grain_len, float(e.get('length', 0.0)))
+            endDiaEd = _fProp('End diameter', 'm', 0.0, full_d,
+                              float(e.get('endDiameter', full_d)))
+            angleEd = _fProp('Angle', 'deg', 0.0, 89.0, 0.0)
+            fracEd = _fProp('End fraction', '', 0.0, 1.0, 1.0)
+
+            self.form.addRow(_ind(tag, 12), enableCell)
+            self.form.addRow(_ind('Profile:', 24), profileCell)
+            self.form.addRow(_ind('Length:', 24), lengthEd)
+            self.form.addRow(_ind('End diameter:', 24), endDiaEd)
+            self.form.addRow(_ind('Angle:', 24), angleEd)
+            self.form.addRow(_ind('End fraction:', 24), fracEd)
+
+            self._odWidgets[end] = dict(enable=enable, enableCell=enableCell,
+                                        profile=profile, profileCell=profileCell,
+                                        length=lengthEd, endDiameter=endDiaEd,
+                                        angle=angleEd, fraction=fracEd)
+
+            self._odSync(end, 'init')   # seed companions from endDiameter
+            profile.currentTextChanged.connect(lambda _t, en=end: self._odSync(en, 'profile'))
+            lengthEd.valueChanged.connect(lambda en=end: self._odSync(en, 'length'))
+            endDiaEd.valueChanged.connect(lambda en=end: self._odSync(en, 'endDiameter'))
+            angleEd.valueChanged.connect(lambda en=end: self._odSync(en, 'angle'))
+            fracEd.valueChanged.connect(lambda en=end: self._odSync(en, 'fraction'))
+
+        # Resync OD companions when the grain's outer diameter changes.
+        if 'diameter' in self.propertyEditors:
+            self.propertyEditors['diameter'].valueChanged.connect(self._odResyncAll)
+
+    def _odResyncAll(self):
+        if self._odWidgets:
+            self._odSync('fwd', 'diameter')
+            self._odSync('aft', 'diameter')
+
+    def _odSync(self, end, changed):
+        """Recompute the coupled OD fields for one end. endDiameter is the
+        canonical value; the half-angle (Linear) / end fraction (Elliptical)
+        are derived from it, and edits to a companion update endDiameter."""
+        if self._odSyncing or not self._odWidgets:
+            return
+        self._odSyncing = True
+        try:
+            w = self._odWidgets[end]
+            full_d = self.propertyEditors['diameter'].getValue()
+            length = w['length'].getValue()
+            if changed == 'angle':
+                end_d = motorlib.taper.od_end_diameter_from_angle(
+                    full_d, length, w['angle'].getValue())
+            elif changed == 'fraction':
+                end_d = motorlib.taper.od_end_diameter_from_fraction(
+                    full_d, w['fraction'].getValue())
+            else:
+                end_d = w['endDiameter'].getValue()
+            end_d = min(full_d, max(0.0, end_d))
+            w['endDiameter'].setValue(end_d)
+            w['angle'].setValue(
+                motorlib.taper.od_angle_from_end_diameter(full_d, length, end_d))
+            w['fraction'].setValue(
+                motorlib.taper.od_fraction_from_end_diameter(full_d, end_d))
+        finally:
+            self._odSyncing = False
+        self._odToggled()
+
+    def _odToggled(self):
+        """Show OD rows per the master enable, each end's enable, and the
+        profile (angle for Linear, end-fraction for Elliptical)."""
+        if not self._odWidgets:
+            return
+        on = self.odEnable.isChecked()
+        for end in ('fwd', 'aft'):
+            w = self._odWidgets.get(end)
+            if w is None:                       # mid-construction
+                continue
+            self.form.setRowVisible(w['enableCell'], on)
+            end_on = on and w['enable'].isChecked()
+            lin = w['profile'].currentText().lower() == 'linear'
+            self.form.setRowVisible(w['profileCell'], end_on)
+            self.form.setRowVisible(w['length'], end_on)
+            self.form.setRowVisible(w['endDiameter'], end_on)
+            self.form.setRowVisible(w['angle'], end_on and lin)
+            self.form.setRowVisible(w['fraction'], end_on and not lin)
+        self.propertyUpdate()
+
+    def _odEnds(self):
+        """The enabled OD end-taper entries from the current form (or [])."""
+        if not self._odWidgets or not self.odEnable.isChecked():
+            return []
+        ends = []
+        for end in ('fwd', 'aft'):
+            w = self._odWidgets.get(end)
+            if w is None:                       # mid-construction
+                continue
+            if w['enable'].isChecked():
+                ends.append({'end': end,
+                             'length': w['length'].getValue(),
+                             'endDiameter': w['endDiameter'].getValue(),
+                             'profile': w['profile'].currentText().lower()})
+        return ends
 
     def _taperToggled(self, on):
         """Show the aft column + profile + preview toggle only when the taper
@@ -283,6 +473,8 @@ class MotorEditor(CollectionEditor):
         on = bool(on)
         for editor in (self._taperAftEditors or {}).values():
             editor.setVisible(on)
+        if hasattr(self, 'taperColHeader'):
+            self.form.setRowVisible(self.taperColHeader, on)
         if hasattr(self, 'taperProfile'):
             self.taperProfile.setVisible(on)
             self.taperProfileLabel.setVisible(on)
@@ -390,4 +582,5 @@ class MotorEditor(CollectionEditor):
         # Drop taper-editor state so getProperties / preview don't act on a
         # stale grain after switching to a nozzle/config object.
         self._taperAftEditors = None
+        self._odWidgets = None
         super().cleanup()

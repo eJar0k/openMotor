@@ -13,15 +13,28 @@ The taper DEFINITION is solver-agnostic data stored on the grain (the
 ``taper`` property); see ``Grain.getTaperDef``. The schema:
 
     {
-      'enabled': bool,
-      'bore': {                      # cross-section taper (implemented)
+      'enabled': bool,               # BORE taper (cross-section)
+      'bore': {
         'profile': 'linear',
         'controlStations': [         # sorted by frac; frac in (0, 1]
           {'frac': 1.0, 'props': {<only the props that differ from the base>}},
         ],
       },
-      'od': {...},                   # outer-diameter / end taper (reserved)
+      'od': {                        # OUTER-diameter / end taper (independent)
+        'enabled': bool,
+        'ends': [                    # 0/1/2 entries (fwd dome + aft cone)
+          {'end': 'aft'|'fwd', 'length': m, 'endDiameter': m,
+           'profile': 'linear'|'elliptical'},
+        ],
+      },
     }
+
+The OD taper shrinks the casting diameter over an END region of the grain
+(propellant cast into a converging nozzle, or a hemispherical/elliptical
+closure). It is realized by setting each slice's ``diameter`` BEFORE the FMM
+runs — openMotor's mask then clips the cross-section to the local OD, so no
+FMM-internal change is needed. Positive-volume only; the tapered end's face is
+auto-inhibited.
 
 The grain's normal properties ARE the forward (frac 0) cross-section; the
 control stations give the aft / intermediate overrides. Two implicit + one
@@ -90,6 +103,91 @@ def aft_props_from_grain(grain):
         if stations:
             overrides = stations[-1].get('props', {}) or {}
     return {name: overrides.get(name, grain.getProperty(name)) for name in names}
+
+
+def od_ends_from_taper(taper_def):
+    """The OD end-taper entries (empty list if OD taper is absent/disabled).
+    Skips entries with non-positive length."""
+    if not isinstance(taper_def, dict):
+        return []
+    od = taper_def.get('od') or {}
+    if not od.get('enabled'):
+        return []
+    return [e for e in od.get('ends', [])
+            if isinstance(e, dict) and float(e.get('length', 0.0)) > 0.0]
+
+
+def od_diameter_at(frac, grain_length, full_diameter, od_ends):
+    """Local casting (outer) diameter at axial fraction ``frac`` in [0, 1]
+    (0 = forward/head, 1 = aft/nozzle).
+
+    Each end entry shrinks the OD over its end region: ``s`` runs 0 (full-OD
+    side) -> 1 (end face). Linear: ``R = R_full - s*(R_full - R_end)``.
+    Elliptical (quarter-ellipse tangent to the cylinder):
+    ``R = R_end + (R_full - R_end)*sqrt(1 - s^2)`` (slope 0 at s=0; end_R=0 is a
+    hemisphere). Where regions from both ends apply, the smaller R wins. Outside
+    every end region the diameter is ``full_diameter``."""
+    import math
+
+    if grain_length <= 0.0 or not od_ends:
+        return full_diameter
+
+    R_full = 0.5 * full_diameter
+    R = R_full
+    for entry in od_ends:
+        L_end = float(entry.get('length', 0.0))
+        if L_end <= 0.0:
+            continue
+        frac_len = min(1.0, L_end / grain_length)
+        R_end = 0.5 * float(entry.get('endDiameter', full_diameter))
+        profile = entry.get('profile', 'linear')
+        if entry.get('end', 'aft') == 'aft':
+            x0 = 1.0 - frac_len                 # region [x0, 1]
+            if frac < x0:
+                continue
+            s = (frac - x0) / frac_len if frac_len > 0.0 else 1.0
+        else:                                   # 'fwd' — region [0, frac_len]
+            if frac > frac_len:
+                continue
+            s = (frac_len - frac) / frac_len if frac_len > 0.0 else 1.0
+        s = min(1.0, max(0.0, s))
+        if profile == 'elliptical':
+            r = R_end + (R_full - R_end) * math.sqrt(max(0.0, 1.0 - s * s))
+        else:
+            r = R_full - s * (R_full - R_end)
+        R = min(R, r)
+    return 2.0 * R
+
+
+# --- GUI companion-input coupling (endDiameter <-> half-angle / end fraction).
+# The GUI shows a half-angle for a Linear end and an end fraction for an
+# Elliptical end; both map to the canonical endDiameter. Pure so they're
+# testable without Qt.
+
+def od_end_diameter_from_angle(full_diameter, length, angle_deg):
+    """endDiameter from the cone half-angle (Linear): R_end = R_full -
+    length*tan(angle)."""
+    import math
+    return full_diameter - 2.0 * length * math.tan(math.radians(angle_deg))
+
+
+def od_angle_from_end_diameter(full_diameter, length, end_diameter):
+    """Cone half-angle (deg) from endDiameter; 0 if length is 0."""
+    import math
+    if length <= 0.0:
+        return 0.0
+    return math.degrees(math.atan(0.5 * (full_diameter - end_diameter) / length))
+
+
+def od_end_diameter_from_fraction(full_diameter, fraction):
+    """endDiameter from the end fraction (Elliptical): endDiameter =
+    fraction*fullDiameter."""
+    return fraction * full_diameter
+
+
+def od_fraction_from_end_diameter(full_diameter, end_diameter):
+    """End fraction from endDiameter; 0 if fullDiameter is 0."""
+    return end_diameter / full_diameter if full_diameter > 0.0 else 0.0
 
 
 def averaged_area_curve(grain, n_slices=None, map_dim=250, n_points=24):
@@ -230,25 +328,43 @@ def expand_tapered_grain(grain, n_slices=None, map_dim=DEFAULT_SLICE_MAP_DIM):
     base = {k: v for k, v in grain.getProperties().items() if k != 'taper'}
     geom = grain.geomName
     length = base.get('length', 0.0)
+    full_diameter = base.get('diameter', 0.0)
 
     if n_slices is None:
         n_slices = taper_slice_count(grain)
     n = max(1, int(n_slices))
 
-    control = _build_control_points(base, taper)
+    # Bore taper: vary the cross-section only when the BORE taper is enabled
+    # (an OD-only grain keeps its base cross-section).
+    if taper.get('enabled'):
+        control = _build_control_points(base, taper)
+    else:
+        control = [(0.0, dict(base))]
+
+    # OD taper: shrink the casting diameter over an end region; force that end
+    # inhibited (bonded to the closure / nozzle).
+    od_ends = od_ends_from_taper(taper)
     orig_fwd, orig_aft = _inh_pair(base.get('inhibitedEnds', 'Neither'))
+    eff_fwd = orig_fwd or any(e.get('end') == 'fwd' for e in od_ends)
+    eff_aft = orig_aft or any(e.get('end') == 'aft' for e in od_ends)
+    # Keep a tiny positive web at a near-closed tip so the FMM doesn't choke.
+    core = float(base.get('coreDiameter', 0.0))
+    min_diameter = core + 2.0e-4
 
     subgrains = []
     for i in range(n):
         frac = (i + 0.5) / n                     # slice center
         props = _interp_at(control, frac)
         props['length'] = length / n
+        if od_ends:
+            d = od_diameter_at(frac, length, full_diameter, od_ends)
+            props['diameter'] = max(d, min_diameter)
         if n == 1:
-            props['inhibitedEnds'] = base.get('inhibitedEnds', 'Neither')
+            props['inhibitedEnds'] = _inh_enum(eff_fwd, eff_aft)
         elif i == 0:
-            props['inhibitedEnds'] = _inh_enum(orig_fwd, True)
+            props['inhibitedEnds'] = _inh_enum(eff_fwd, True)
         elif i == n - 1:
-            props['inhibitedEnds'] = _inh_enum(True, orig_aft)
+            props['inhibitedEnds'] = _inh_enum(True, eff_aft)
         else:
             props['inhibitedEnds'] = 'Both'
 
