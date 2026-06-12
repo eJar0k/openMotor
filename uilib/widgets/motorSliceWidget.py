@@ -133,21 +133,39 @@ def _to_edge_values(vals):
     return out
 
 
+def _router_cells(axial, lengthScale):
+    """Per-cell outer (casing) radius in display units. Uses the per-cell
+    ``cell_D_outer`` (OD / end taper) when present, else falls back to the
+    scalar ``0.5 * D_outer`` for every cell (pre-OD results)."""
+    n = np.asarray(axial['x_cell']).size
+    cdo = axial.get('cell_D_outer')
+    if cdo is not None and len(cdo) == n:
+        return 0.5 * np.asarray(cdo, float) * lengthScale
+    return np.full(n, 0.5 * float(axial['D_outer']) * lengthScale)
+
+
+def _router_edges(axial, lengthScale):
+    """Per-edge outer (casing) radius (n+1) — the per-cell casing projected to
+    cell edges so the casing line / mesh / propellant top follow an OD taper."""
+    return _to_edge_values(_router_cells(axial, lengthScale))
+
+
 def _bore_geometry(axial, frame, lengthScale):
-    """Display-unit (edges, R_outer, Rb_edge) for ``frame``. Rb_edge is the
-    per-cell bore wall at cell edges (open chamber where no grain) — used by
-    the hover region test."""
+    """Display-unit (edges, Ro_edge, Rb_edge) for ``frame``. ``Ro_edge`` is the
+    per-edge casing radius (n+1; follows an OD / end taper, else flat); Rb_edge
+    is the per-cell bore wall at cell edges (open chamber where no grain) —
+    both used by the hover region test."""
     x = np.asarray(axial['x_cell'], float)
     dx = float(axial['dx'])
-    R_outer = 0.5 * float(axial['D_outer'])
     seg = np.asarray(axial['cell_segment_id'])
     D_port = np.asarray(axial['fields']['D_port'][frame], float)
-    Rb = np.clip(0.5 * D_port, 0.0, R_outer)
-    Rb[seg < 0] = R_outer
-    Ro = R_outer * lengthScale
+    Ro_cell = _router_cells(axial, lengthScale)
+    Rb = np.clip(0.5 * D_port * lengthScale, 0.0, Ro_cell)
+    Rb[seg < 0] = Ro_cell[seg < 0]
     edges = _edges_from_centers(x * lengthScale, dx * lengthScale)
-    Rb_edge = np.clip(_to_edge_values(Rb * lengthScale), 0.0, Ro)
-    return edges, Ro, Rb_edge
+    Ro_edge = _router_edges(axial, lengthScale)
+    Rb_edge = np.clip(_to_edge_values(Rb), 0.0, Ro_edge)
+    return edges, Ro_edge, Rb_edge
 
 
 def _seg_bore_path(inside, x_fwd, x_aft, edges, rb_cell, rb_edge):
@@ -180,20 +198,23 @@ def _draw_frame_artists(ax, axial, frame, field, *, cmap, norm,
     """
     x = np.asarray(axial['x_cell'], float) * lengthScale
     dx = float(axial['dx']) * lengthScale
-    Ro = 0.5 * float(axial['D_outer']) * lengthScale
+    Ro_cell = _router_cells(axial, lengthScale)   # per-cell casing radius
     edges = _edges_from_centers(x, dx)
+    Ro_edge = _router_edges(axial, lengthScale)   # per-edge casing radius (n+1)
     fieldVals = np.asarray(axial['fields'][field][frame], float) * fieldScale
 
+    # Full-height heatmap mesh whose top/bottom edges follow the (tapered)
+    # casing — ±Ro_edge per cell edge.
     Xe = np.tile(edges, (2, 1))
-    Ye = np.vstack([np.full(edges.size, -Ro), np.full(edges.size, Ro)])
+    Ye = np.vstack([-Ro_edge, Ro_edge])
     mesh = ax.pcolormesh(Xe, Ye, fieldVals.reshape(1, -1), cmap=cmap, norm=norm,
                          shading='flat', zorder=1)
     artists = [mesh]
 
     def _rb(frame_idx):
         Rb_cell = np.clip(0.5 * np.asarray(axial['fields']['D_port'][frame_idx], float)
-                          * lengthScale, 0.0, Ro)
-        Rb_edge = np.clip(_to_edge_values(Rb_cell), 0.0, Ro)
+                          * lengthScale, 0.0, Ro_cell)
+        Rb_edge = np.clip(_to_edge_values(Rb_cell), 0.0, Ro_edge)
         return Rb_cell, Rb_edge
 
     def _segments(fr, ar):
@@ -211,9 +232,13 @@ def _draw_frame_artists(ax, axial, frame, field, *, cmap, norm,
                 yield inside, x_fwd, x_aft
 
     def _fill(xpath, rbpath, *, color, edgecolor, alpha, lw, zorder, ls='-'):
-        artists.append(ax.fill_between(xpath, rbpath, Ro, color=color, edgecolor=edgecolor,
+        # The propellant top follows the local casing (Ro interpolated onto the
+        # bore-wall polyline's x nodes), so an OD-tapered grain fills to the
+        # shrinking casing rather than a flat line.
+        ro_top = np.interp(xpath, edges, Ro_edge)
+        artists.append(ax.fill_between(xpath, rbpath, ro_top, color=color, edgecolor=edgecolor,
                                        linewidth=lw, linestyle=ls, alpha=alpha, zorder=zorder))
-        artists.append(ax.fill_between(xpath, -Ro, -rbpath, color=color, edgecolor=edgecolor,
+        artists.append(ax.fill_between(xpath, -ro_top, -rbpath, color=color, edgecolor=edgecolor,
                                        linewidth=lw, linestyle=ls, alpha=alpha, zorder=zorder))
 
     sg = axial.get('seg_geom')
@@ -239,17 +264,23 @@ def _draw_frame_artists(ax, axial, frame, field, *, cmap, norm,
         Rb_cell, _ = _rb(frame)
         seg = np.asarray(axial['cell_segment_id'])
         Rb = Rb_cell.copy()
-        Rb[seg < 0] = Ro
-        rb_edge = np.clip(_to_edge_values(Rb), 0.0, Ro)
+        Rb[seg < 0] = Ro_cell[seg < 0]
+        rb_edge = np.clip(_to_edge_values(Rb), 0.0, Ro_edge)
         _fill(edges, rb_edge, color=_PROPELLANT, edgecolor=_STROKE, alpha=1.0, lw=0.6, zorder=2)
     return tuple(artists)
 
 
-def _style_axes(ax, edges, Ro, lengthLabel, aspect='auto'):
-    ax.plot([edges[0], edges[-1]], [Ro, Ro], color=_CASING, lw=1.2, zorder=3)
-    ax.plot([edges[0], edges[-1]], [-Ro, -Ro], color=_CASING, lw=1.2, zorder=3)
+def _style_axes(ax, edges, Ro_edge, lengthLabel, aspect='auto'):
+    # Casing outline follows the per-edge radius (a polyline, so an OD / end
+    # taper draws as a cone / dome rather than a flat line).
+    Ro_edge = np.asarray(Ro_edge, float)
+    if Ro_edge.ndim == 0 or Ro_edge.size == 1:        # scalar fallback
+        Ro_edge = np.full(edges.size, float(Ro_edge))
+    ax.plot(edges, Ro_edge, color=_CASING, lw=1.2, zorder=3)
+    ax.plot(edges, -Ro_edge, color=_CASING, lw=1.2, zorder=3)
+    Ro_max = float(np.max(Ro_edge)) if Ro_edge.size else 1.0
     ax.set_xlim(edges[0], edges[-1])
-    ax.set_ylim(-Ro * 1.02, Ro * 1.02)
+    ax.set_ylim(-Ro_max * 1.02, Ro_max * 1.02)
     # 'auto' = stretch radius to fill the pane (default); 'equal' = true 1:1
     # scale (thin strip — use the nav toolbar to zoom/pan).
     ax.set_aspect(aspect)
@@ -466,7 +497,8 @@ class MotorSliceWidget(FigureCanvas):
             return
         x = np.asarray(self.axial['x_cell'], float) * self._lenScale
         dxh = 0.5 * float(self.axial['dx']) * self._lenScale
-        Ro = 0.5 * float(self.axial['D_outer']) * self._lenScale
+        # Label y uses the max casing radius so labels clear an OD-tapered wall.
+        Ro = float(np.max(_router_cells(self.axial, self._lenScale)))
         n = x.size
         # Sort by axial position so adjacent labels can be staggered in y to
         # avoid overlap (cycle 2 levels when within a horizontal threshold).
@@ -505,8 +537,9 @@ class MotorSliceWidget(FigureCanvas):
             return
         x = np.asarray(self.axial['x_cell'], float) * self._lenScale
         i = int(np.argmin(np.abs(x - event.xdata)))
-        edges, Ro, Rb_edge = _bore_geometry(self.axial, self.frame, self._lenScale)
+        edges, Ro_edge, Rb_edge = _bore_geometry(self.axial, self.frame, self._lenScale)
         Rb_cell = 0.5 * (Rb_edge[i] + Rb_edge[i + 1])
+        Ro_cell = 0.5 * (Ro_edge[i] + Ro_edge[i + 1])   # local casing radius
         label = dict((k, l) for k, l, _u in SLICE_FIELDS).get(self._field, self._field)
         xmm = x[i]
         if abs(event.ydata) <= Rb_cell:                # over the bore
@@ -514,7 +547,7 @@ class MotorSliceWidget(FigureCanvas):
             u = ' {}'.format(self._fieldUnit) if self._fieldUnit else ''
             txt = 'cell {}  x={:.1f} {}\n{} = {:.4g}{}'.format(
                 i, xmm, self._lenUnit, label, val, u)
-        elif abs(event.ydata) <= Ro:                   # over the solid web
+        elif abs(event.ydata) <= Ro_cell:              # over the solid web
             web = self.axial.get('cell_wall_web')
             seg = np.asarray(self.axial['cell_segment_id'])
             if web is not None and i < len(web) and web[i] > 0 and seg[i] >= 0:
