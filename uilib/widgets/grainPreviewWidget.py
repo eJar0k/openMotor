@@ -9,7 +9,52 @@ import motorlib.units
 
 from ..views.GrainPreview_ui import Ui_GrainPreview
 from .grainPreviewGraph import GrainPreviewGraph
-from .motorSliceWidget import renderGrainLongitudinal
+
+
+# Colors for the side-on longitudinal grain preview (the OD-taper view).
+_PROPELLANT = '#c8c8c8'   # light grey solid propellant
+_STROKE = '#555555'       # fine outline on the propellant (bore wall + end faces)
+_CASING = '#202020'       # casing line
+
+
+def renderGrainLongitudinal(ax, x, R_bore, R_outer, *, lengthScale=1.0,
+                            lengthLabel='m', aspect='equal', xlim=None,
+                            fontsize=7):
+    """Static side-on (radius-vs-axial) preview of ONE grain at t=0, for the
+    grain editor's OD-taper view. ``x`` and ``R_outer`` are length-N arrays
+    (meters); ``R_bore`` is a scalar or length-N array (the hydraulic-equivalent
+    bore radius). Draws grey propellant between the bore and the (tapered)
+    casing, mirrored about the axis (geometry only). Drawn at TRUE 1:1 scale by
+    default; ``xlim`` (meters) crops to a tapered end so the profile is visible
+    without the long uniform middle squishing it."""
+    xs = np.asarray(x, float) * lengthScale
+    ro = np.asarray(R_outer, float) * lengthScale
+    rb = np.full_like(xs, float(R_bore) * lengthScale) if np.isscalar(R_bore) \
+        else np.asarray(R_bore, float) * lengthScale
+    rb = np.clip(rb, 0.0, ro)
+
+    ax.clear()
+    ax.fill_between(xs, rb, ro, color=_PROPELLANT, edgecolor=_STROKE,
+                    linewidth=0.6, zorder=2)
+    ax.fill_between(xs, -ro, -rb, color=_PROPELLANT, edgecolor=_STROKE,
+                    linewidth=0.6, zorder=2)
+    ax.plot(xs, ro, color=_CASING, lw=1.2, zorder=3)
+    ax.plot(xs, -ro, color=_CASING, lw=1.2, zorder=3)
+
+    rmax = float(np.max(ro)) if ro.size else 1.0
+    if xlim is not None:
+        xlo, xhi = xlim[0] * lengthScale, xlim[1] * lengthScale
+    else:
+        xlo, xhi = xs[0], xs[-1]
+    # Pad both axes off the larger extent so the outline isn't flush to the
+    # frame and a very thin grain still renders with breathing room (at 1:1).
+    pad = 0.1 * max(xhi - xlo, 2.0 * rmax, 1e-9)
+    ax.set_xlim(xlo - pad, xhi + pad)
+    ax.set_ylim(-rmax - pad, rmax + pad)
+    ax.set_aspect(aspect)   # 'equal' => true 1:1 scale
+    ax.set_xlabel('Axial - {}'.format(lengthLabel), fontsize=fontsize)
+    ax.set_ylabel('R - {}'.format(lengthLabel), fontsize=fontsize)
+    ax.tick_params(labelsize=fontsize)
 
 
 class GrainPreviewWidget(QWidget):
