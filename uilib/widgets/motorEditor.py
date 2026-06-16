@@ -76,6 +76,7 @@ class MotorEditor(CollectionEditor):
         self._taperAftEditors = None
         self._odWidgets = None       # OD/end-taper controls, per end ('fwd'/'aft')
         self._odSyncing = False      # reentrancy guard for the coupled OD fields
+        self._buildingGrainForm = False  # suppress preview rebuilds during build
 
     # Igniter-chamber fields that only apply to one injection topology.
     _IGNITER_PLENUM_ONLY = ('throat_area', 'volume')
@@ -116,6 +117,11 @@ class MotorEditor(CollectionEditor):
         self._applyIgniterFieldRules()
 
     def propertyUpdate(self):
+        # While _loadGrainProperties builds the taper form, each field/toggle it
+        # adds would otherwise rebuild the grain and spawn a preview thread.
+        # Suppress those; one update runs once the form is complete.
+        if self._buildingGrainForm:
+            return
         if 'injection_topology' in self.propertyEditors:
             # Igniter-chamber form (config screen, srm_1d): drive field
             # relevance off the topology dropdown.
@@ -230,6 +236,17 @@ class MotorEditor(CollectionEditor):
             self.loadProperties(grain)
             return
 
+        self._buildingGrainForm = True
+        try:
+            self._populateGrainForm(grain)
+        finally:
+            self._buildingGrainForm = False
+        self.propertyUpdate()
+
+    def _populateGrainForm(self, grain):
+        """Build the taper form rows for ``grain``. Called inside the
+        _buildingGrainForm guard so the field/toggle wiring it sets up does not
+        trigger a preview rebuild per row; loadObject renders once afterward."""
         self._taperAftEditors = {}
 
         taperable = set(motorlib.taper.taperable_property_names(grain))
@@ -321,7 +338,8 @@ class MotorEditor(CollectionEditor):
         if self.buttons:
             self.applyButton.show()
             self.cancelButton.show()
-        self.propertyUpdate()
+        # No propertyUpdate() here: _loadGrainProperties renders once after the
+        # _buildingGrainForm guard is cleared (and loadObject again once shown).
 
     def _buildOdControls(self, grain):
         """OD / end-taper section: a master enable, then per end (fwd/aft) a
