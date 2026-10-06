@@ -105,7 +105,8 @@ class PreferencesManager(QObject):
             self.preferences.applyDict(prefDict)
             # Plugins upgrade untouched superseded defaults in their saved
             # solver config (e.g. the pre-v0.7.5 srm_1d knobs).
-            self.preferences.solverConfigs, upgraded =                 solvers.upgrade_solver_configs(self.preferences.solverConfigs)
+            self.preferences.solverConfigs, upgraded = (
+                solvers.upgrade_solver_configs(self.preferences.solverConfigs))
             if upgraded:
                 for name, keys in upgraded.items():
                     logger.log("Upgraded stale solver-config defaults for '{}': {}".format(
