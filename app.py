@@ -29,14 +29,14 @@ class App(QApplication):
             mpl.rcParams['axes.facecolor'] = '1e1e1e'
             mpl.rcParams['figure.facecolor'] = '1e1e1e'
 
-        self.preferencesManager = uilib.preferencesManager.PreferencesManager()
-
         # v0.8.0 (D1/D6): discover external solver plugins (srm_1d transient)
         # so they appear in the registry / solver picker. Best-effort — the
         # app runs with only the built-in quasi-steady solver if absent. Must
-        # run BEFORE the PyrogenManager is built: the igniter library is
-        # seeded / upgraded from the igniter-providing plugin.
+        # run BEFORE the PreferencesManager and PyrogenManager are built: they
+        # upgrade saved solver config / the igniter library via the plugin.
         solvers.discover_external_solvers()
+
+        self.preferencesManager = uilib.preferencesManager.PreferencesManager()
 
         self.propellantManager = uilib.propellantManager.PropellantManager()
         self.preferencesManager.preferencesChanged.connect(self.propellantManager.setPreferences)

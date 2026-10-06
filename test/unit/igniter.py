@@ -21,6 +21,7 @@ import motorlib.igniter
 
 _TMP_ROOT = tempfile.mkdtemp(prefix='om_igniter_unit_')
 _SKIP = None
+_SKIP_PREFS = 'not imported'
 _orig = (platformdirs.user_data_dir, platformdirs.user_log_dir)
 platformdirs.user_data_dir = lambda *a, **k: os.path.join(_TMP_ROOT, 'data')
 platformdirs.user_log_dir = lambda *a, **k: os.path.join(_TMP_ROOT, 'log')
@@ -31,6 +32,11 @@ try:
     import srm_1d.srm1d_plugin  # noqa: F401  (registers the igniter provider)
     import uilib.fileIO as fileIO
     import uilib.pyrogenManager as pyrogenManager
+    try:
+        import uilib.preferencesManager as preferencesManager
+        _SKIP_PREFS = None
+    except Exception as exc:  # generated uilib/views/*_ui.py not built
+        _SKIP_PREFS = 'preferencesManager unavailable: {}'.format(exc)
 except Exception as exc:  # pragma: no cover - plugin / Qt not installed
     _SKIP = 'igniter provider or uilib unavailable: {}'.format(exc)
 finally:
@@ -247,6 +253,68 @@ class TestPyrogenManager(unittest.TestCase):
             self._write([copy.deepcopy(LEGACY_BPNV)])
             mgr = pyrogenManager.PyrogenManager()
             self.assertEqual(mgr.pyrogens, [LEGACY_BPNV])  # untouched
+
+
+# The user's saved srm_1d GUI run config (stale pre-v0.7.5 knobs + a deliberate
+# P_cutoff), copied from a real preferences file.
+STALE_CFG = {'P_cutoff': 344750.0, 'T_ignition': 850.0, 'cfl_target': 0.3,
+             'kappa': 0.45, 'roughness': 50.0, 't_max': 10.0}
+SOLVER = 'srm_1d-transient'
+
+
+@unittest.skipIf(_SKIP, _SKIP)
+class TestSolverConfigUpgrade(unittest.TestCase):
+
+    def test_base_solver_hook_is_passthrough(self):
+        qs = motorlib.solvers.get_solver(motorlib.solvers.QUASI_STEADY)
+        self.assertEqual(qs.upgrade_solver_config({'a': 1}), ({'a': 1}, []))
+
+    def test_upgrade_solver_configs_helper(self):
+        cfgs = {SOLVER: dict(STALE_CFG), 'other': {'roughness': 50.0}, 'x': 3}
+        orig = copy.deepcopy(cfgs)
+        new, upgraded = motorlib.solvers.upgrade_solver_configs(cfgs)
+        self.assertEqual(cfgs, orig)                      # not mutated
+        self.assertEqual(sorted(upgraded[SOLVER]),
+                         ['T_ignition', 'kappa', 'roughness'])
+        self.assertEqual(list(upgraded), [SOLVER])
+        self.assertEqual(new[SOLVER]['P_cutoff'], 344750.0)
+        self.assertEqual(new['other'], {'roughness': 50.0})   # unknown solver
+        self.assertEqual(new['x'], 3)
+
+    def test_motor_apply_dict_upgrades_per_motor_config(self):
+        d = motorlib.motor.Motor().getDict()
+        d['solverConfigs'] = {SOLVER: dict(STALE_CFG)}
+        out = motorlib.motor.Motor(d).solverConfigs[SOLVER]
+        self.assertAlmostEqual(out['roughness'], 32.0)
+        self.assertEqual((out['kappa'], out['T_ignition']), (0.44, 756.0))
+        self.assertEqual(out['P_cutoff'], 344750.0)
+        self.assertEqual(d['solverConfigs'][SOLVER]['roughness'], 50.0)
+        d['solverConfigs'] = {SOLVER: dict(STALE_CFG, roughness=40.0)}
+        self.assertEqual(
+            motorlib.motor.Motor(d).solverConfigs[SOLVER]['roughness'], 40.0)
+
+
+@unittest.skipIf(_SKIP or _SKIP_PREFS, _SKIP or _SKIP_PREFS)
+class TestPreferencesUpgrade(unittest.TestCase):
+
+    def test_preferences_load_upgrades_and_saves(self):
+        d = tempfile.mkdtemp(prefix='pref_', dir=_TMP_ROOT)
+        with mock.patch.object(preferencesManager, 'getConfigPath',
+                               return_value=d + '/'):
+            pm = preferencesManager.PreferencesManager(makeMenu=False)
+            pref = pm.preferences.getDict()
+            pref['solverConfigs'] = {SOLVER: dict(STALE_CFG)}
+            fileIO.saveFile(os.path.join(d, 'preferences.yaml'), pref,
+                            fileIO.fileTypes.PREFERENCES)
+            pm = preferencesManager.PreferencesManager(makeMenu=False)
+            cfg = pm.preferences.solverConfigs[SOLVER]
+            self.assertAlmostEqual(cfg['roughness'], 32.0)
+            self.assertEqual((cfg['kappa'], cfg['T_ignition']), (0.44, 756.0))
+            self.assertEqual(cfg['P_cutoff'], 344750.0)
+            saved = fileIO.loadFile(os.path.join(d, 'preferences.yaml'),
+                                    fileIO.fileTypes.PREFERENCES)
+            self.assertEqual(saved['solverConfigs'][SOLVER]['kappa'], 0.44)
+            self.assertAlmostEqual(saved['solverConfigs'][SOLVER]['roughness'], 32.0)
 
 
 if __name__ == '__main__':

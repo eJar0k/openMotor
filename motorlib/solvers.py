@@ -38,6 +38,13 @@ class SolverPlugin:
         back to :meth:`simulate` as the ``config`` dict. Default: ``None``."""
         return None
 
+    def upgrade_solver_config(self, values):
+        """Return ``(new_values, upgraded_keys)`` for a saved run-config dict
+        (the dict this solver's config schema collects): untouched superseded
+        defaults replaced by the current ones, everything else left alone.
+        Must not mutate the input. Default: passthrough."""
+        return values, []
+
     # ---- optional igniter hooks (plugin-provided igniter) ----------------
     # A solver that consumes an igniter (``capabilities['igniter']``) owns the
     # igniter model: the fork hardcodes none of it. Base-class defaults mean
@@ -83,6 +90,24 @@ def get_solver(name):
 def list_solvers():
     """Return the names of all registered solvers."""
     return list(_SOLVERS.keys())
+
+
+def upgrade_solver_configs(configs):
+    """Apply each registered solver's ``upgrade_solver_config`` to its saved
+    run-config in ``configs`` (``{solver name: values dict}``). Returns
+    ``(new_configs, upgraded)`` where ``upgraded`` maps a solver name to the
+    list of keys it upgraded (empty when nothing changed). The input is not
+    mutated; entries for unknown solvers pass through untouched."""
+    new, upgraded = {}, {}
+    for name, values in (configs or {}).items():
+        solver = _SOLVERS.get(name)
+        if solver is None or not isinstance(values, dict):
+            new[name] = values
+            continue
+        new[name], keys = solver.upgrade_solver_config(values)
+        if keys:
+            upgraded[name] = list(keys)
+    return new, upgraded
 
 
 def get_igniter_provider():

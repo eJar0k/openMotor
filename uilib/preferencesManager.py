@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QApplication
 from motorlib.properties import PropertyCollection, EnumProperty
 from motorlib.units import unitLabels, getAllConversions
 from motorlib.motor import MotorConfig
+from motorlib import solvers
 from motorlib.solvers import QUASI_STEADY
 
 from .fileIO import loadFile, saveFile, getConfigPath, fileTypes
@@ -102,6 +103,14 @@ class PreferencesManager(QObject):
         try:
             prefDict = loadFile(preferencesPath, fileTypes.PREFERENCES)
             self.preferences.applyDict(prefDict)
+            # Plugins upgrade untouched superseded defaults in their saved
+            # solver config (e.g. the pre-v0.7.5 srm_1d knobs).
+            self.preferences.solverConfigs, upgraded =                 solvers.upgrade_solver_configs(self.preferences.solverConfigs)
+            if upgraded:
+                for name, keys in upgraded.items():
+                    logger.log("Upgraded stale solver-config defaults for '{}': {}".format(
+                        name, ', '.join(keys)))
+                self.savePreferences()
             self.publishPreferences()
         except FileNotFoundError:
             logger.warn('Preferences file does not exist, creating new file')

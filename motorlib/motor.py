@@ -1,6 +1,7 @@
 """Contains the motor class and a supporting configuration property collection."""
 
 import copy
+import logging
 from typing import Dict, Union, List
 import numpy as np
 from scipy.optimize import newton
@@ -135,7 +136,13 @@ class Motor:
                 igniterData, _ = provider.upgrade_igniter_block(igniterData)
         self.igniterData = igniterData
         # Per-motor solver run-config overrides (optional; empty if absent).
-        self.solverConfigs = dictionary.get("solverConfigs", {})
+        # Plugins upgrade untouched superseded defaults in their saved config.
+        self.solverConfigs, upgraded = solvers.upgrade_solver_configs(
+            dictionary.get("solverConfigs", {}))
+        for name, keys in upgraded.items():
+            logging.getLogger(__name__).info(
+                "Upgraded stale solver-config defaults for '%s': %s",
+                name, ', '.join(keys))
 
     def calcBurningSurfaceArea(self, regDepth):
         burnoutThres = self.config.getProperty("burnoutWebThres")
