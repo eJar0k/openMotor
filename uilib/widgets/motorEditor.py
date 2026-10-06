@@ -7,6 +7,7 @@ import motorlib.nozzle
 import motorlib.motor
 import motorlib.taper
 import motorlib.properties
+from motorlib import solvers
 
 from .collectionEditor import CollectionEditor
 from .propertyEditor import PropertyEditor
@@ -70,6 +71,7 @@ class MotorEditor(CollectionEditor):
         self.configMotor = None     # set while editing the motor config
         self.controller = None
         self._pyrogenNames = []
+        self._pyrogenInitial = None
         # Axial-taper editor state (set only while editing a perforated grain).
         # None signals "no taper controls active" so getProperties / preview
         # leave non-grain objects untouched.
@@ -513,7 +515,8 @@ class MotorEditor(CollectionEditor):
         self.grainPreview.hide()
 
         self.controller = SolverConfigController(
-            self, motor.config, motor.solverConfigs, igniterSource=motor.igniter)
+            self, motor.config, motor.solverConfigs,
+            withIgniter=True, igniterBlock=motor.igniterData)
 
         self.solverSelector.blockSignals(True)
         self.solverSelector.clear()
@@ -531,7 +534,8 @@ class MotorEditor(CollectionEditor):
         an igniter, else hide the pyrogen picker."""
         self.controller.show(name)
         if self.controller.usesIgniter(name):
-            current = self.configMotor.igniterPyrogen.getProperty('name')
+            current = self._currentPyrogenName()
+            self._pyrogenInitial = current
             names = list(self._pyrogenNames)
             if current and current not in names:
                 names.insert(0, current)
@@ -543,8 +547,19 @@ class MotorEditor(CollectionEditor):
             self.pyrogenSelector.blockSignals(False)
             self.pyrogenSelectorContainer.show()
             self._setupIgniterFormExtras()
+            # Baseline AFTER the form extras so only real user edits count.
+            self.controller.captureWidgetBaseline()
         else:
             self.pyrogenSelectorContainer.hide()
+
+    def _currentPyrogenName(self):
+        """Name of the material in the motor's igniter block (the provider's
+        default material when the motor has no block yet)."""
+        block = self.configMotor.igniterData
+        if block is None:
+            provider = solvers.get_igniter_provider()
+            block = provider.get_default_igniter() if provider else None
+        return ((block or {}).get('pyrogen') or {}).get('name')
 
     def setActiveSolver(self, name):
         """Sync the dropdown when the active solver changes elsewhere (no-op
@@ -566,7 +581,13 @@ class MotorEditor(CollectionEditor):
             usesIgniter = self.controller.usesIgniter(
                 self.solverSelector.currentText())
             igniterProps = (self.controller.igniterProps() or {}) if usesIgniter else {}
-            pyrogenName = self.pyrogenSelector.currentText() if usesIgniter else ''
+            # A library pick is reported ONLY when it differs from the motor's
+            # current material (otherwise the embedded material is untouched).
+            pyrogenName = ''
+            if usesIgniter:
+                picked = self.pyrogenSelector.currentText()
+                if picked and picked != self._pyrogenInitial:
+                    pyrogenName = picked
             # "auto" (spin at 0, or any non-positive entry) -> -1 sentinel.
             for key in self._IGNITER_AUTO_FIELDS:
                 if key in igniterProps and igniterProps[key] <= 0.0:

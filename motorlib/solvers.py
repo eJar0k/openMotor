@@ -38,6 +38,36 @@ class SolverPlugin:
         back to :meth:`simulate` as the ``config`` dict. Default: ``None``."""
         return None
 
+    # ---- optional igniter hooks (plugin-provided igniter) ----------------
+    # A solver that consumes an igniter (``capabilities['igniter']``) owns the
+    # igniter model: the fork hardcodes none of it. Base-class defaults mean
+    # "no igniter".
+
+    def get_igniter_material_schema(self):
+        """A FRESH ``PropertyCollection`` describing one igniter material
+        (``data.igniter.pyrogen``), or ``None``."""
+        return None
+
+    def get_igniter_chamber_schema(self):
+        """A FRESH ``PropertyCollection`` describing the per-motor igniter
+        chamber sizing (the rest of ``data.igniter``), or ``None``."""
+        return None
+
+    def get_igniter_materials(self):
+        """The plugin's built-in material library: ``list[dict]`` of
+        ``data.igniter.pyrogen`` dicts."""
+        return []
+
+    def get_default_igniter(self):
+        """A default ``data.igniter`` block (``dict``), or ``None``."""
+        return None
+
+    def upgrade_igniter_block(self, block):
+        """Return ``(block, changed)``: ``block`` with superseded library
+        values replaced by the plugin's current ones. Must not mutate the
+        input. Default: passthrough."""
+        return block, False
+
 
 def register_solver(solver):
     """Register a solver instance under its ``name``. Returns the solver."""
@@ -53,6 +83,15 @@ def get_solver(name):
 def list_solvers():
     """Return the names of all registered solvers."""
     return list(_SOLVERS.keys())
+
+
+def get_igniter_provider():
+    """The first registered solver whose ``capabilities['igniter']`` is truthy
+    (it owns the igniter model), else ``None``."""
+    for solver in _SOLVERS.values():
+        if solver.capabilities.get('igniter'):
+            return solver
+    return None
 
 
 def discover_external_solvers():

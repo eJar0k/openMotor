@@ -31,6 +31,13 @@ class App(QApplication):
 
         self.preferencesManager = uilib.preferencesManager.PreferencesManager()
 
+        # v0.8.0 (D1/D6): discover external solver plugins (srm_1d transient)
+        # so they appear in the registry / solver picker. Best-effort — the
+        # app runs with only the built-in quasi-steady solver if absent. Must
+        # run BEFORE the PyrogenManager is built: the igniter library is
+        # seeded / upgraded from the igniter-providing plugin.
+        solvers.discover_external_solvers()
+
         self.propellantManager = uilib.propellantManager.PropellantManager()
         self.preferencesManager.preferencesChanged.connect(self.propellantManager.setPreferences)
 
@@ -39,10 +46,6 @@ class App(QApplication):
 
         self.simulationManager = uilib.simulationManager.SimulationManager()
         self.preferencesManager.preferencesChanged.connect(self.simulationManager.setPreferences)
-        # v0.8.0 (D1/D6): discover external solver plugins (srm_1d transient)
-        # so they appear in the registry / solver picker. Best-effort — the
-        # app runs with only the built-in quasi-steady solver if absent.
-        solvers.discover_external_solvers()
 
         self.fileManager = uilib.fileManager.FileManager(self)
         startupFileLoaded = False

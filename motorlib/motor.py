@@ -1,5 +1,6 @@
 """Contains the motor class and a supporting configuration property collection."""
 
+import copy
 from typing import Dict, Union, List
 import numpy as np
 from scipy.optimize import newton
@@ -10,7 +11,7 @@ from .constants import atmosphericPressure, gasConstant
 from .grains import EndBurningGrain, grainTypes
 from .nozzle import Nozzle
 from .propellant import Propellant
-from .igniter import Igniter, Pyrogen
+from . import solvers
 from .properties import FloatProperty, IntProperty, PropertyCollection
 from .simResult import SimAlert, SimAlertLevel, SimAlertType, SimulationResult
 from .grain import Grain
@@ -71,13 +72,13 @@ class Motor:
         self.propellant = None
         self.nozzle = Nozzle()
         self.config = MotorConfig()
-        # v0.8.0: the motor carries its igniter the same way it carries its
-        # propellant — a per-motor chamber sizing (``Igniter``) plus an
-        # embedded reusable pyrogen material (``Pyrogen``). Serialized under
-        # ``data.igniter`` (chamber fields + a nested ``pyrogen`` block) so it
-        # round-trips through the GUI and reaches srm_1d's transient solver.
-        self.igniter = Igniter()
-        self.igniterPyrogen = Pyrogen()
+        # The motor carries its igniter the way it carries its propellant: an
+        # embedded material plus per-motor chamber sizing, serialized under
+        # ``data.igniter``. The schema is owned by the solver plugin that
+        # consumes it (see motorlib.igniter), so the block is kept as a RAW
+        # dict -- lossless for unknown keys / None / out-of-range values. None
+        # = the motor has no igniter block.
+        self.igniterData = None
         # v0.8.0: per-motor solver run-config overrides, keyed by solver name
         # (plain value dicts; the schema is owned by the solver plugin). Empty
         # = use the global Preferences config. The quasi-steady solver uses
@@ -103,10 +104,9 @@ class Motor:
             for grain in self.grains
         ]
         motorData["config"] = self.config.getProperties()
-        # Igniter block: chamber sizing fields + the embedded pyrogen material.
-        igniterData = self.igniter.getProperties()
-        igniterData["pyrogen"] = self.igniterPyrogen.getProperties()
-        motorData["igniter"] = igniterData
+        # Igniter block (raw dict, passed through untouched).
+        if self.igniterData is not None:
+            motorData["igniter"] = copy.deepcopy(self.igniterData)
         # Per-motor solver run-config overrides (empty = use global Preferences).
         motorData["solverConfigs"] = self.solverConfigs
         return motorData
@@ -124,16 +124,16 @@ class Motor:
             self.grains.append(grainTypes[entry["type"]]())
             self.grains[-1].setProperties(entry["properties"])
         self.config.setProperties(dictionary["config"])
-        # Igniter is optional for backward compatibility — pre-0.7.0 files
-        # (and dicts that predate the block) leave the defaults in place. The
-        # nested ``pyrogen`` material applies to ``igniterPyrogen``; the
-        # remaining chamber-sizing keys apply to ``igniter``.
+        # Igniter block: optional (pre-0.7.0 files lack it). Kept verbatim as
+        # a raw dict; the igniter provider (if any) may upgrade a material
+        # that is an exact superseded library snapshot to the current one.
         igniterData = dictionary.get("igniter")
         if igniterData is not None:
-            pyrogenData = igniterData.get("pyrogen")
-            if pyrogenData is not None:
-                self.igniterPyrogen.setProperties(pyrogenData)
-            self.igniter.setProperties(igniterData)
+            igniterData = copy.deepcopy(igniterData)
+            provider = solvers.get_igniter_provider()
+            if provider is not None:
+                igniterData, _ = provider.upgrade_igniter_block(igniterData)
+        self.igniterData = igniterData
         # Per-motor solver run-config overrides (optional; empty if absent).
         self.solverConfigs = dictionary.get("solverConfigs", {})
 

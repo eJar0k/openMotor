@@ -6,6 +6,7 @@ from PyQt6.QtGui import QActionGroup
 from PyQt6.QtCore import Qt
 
 import motorlib
+import motorlib.igniter
 from motorlib import solvers
 import uilib.widgets.aboutDialog
 from uilib.views.MainWindow_ui import Ui_MainWindow
@@ -106,17 +107,20 @@ class Window(QMainWindow):
         cm = self.app.fileManager.getCurrentMotor()
         cm.config.setProperties(general)
         cm.solverConfigs = solverConfigs
-        # Igniter (srm_1d only): copy the picked library pyrogen into the
-        # motor's embedded material (mirrors the grain propellant picker) and
-        # apply the chamber settings. Empty/None for solvers without an igniter.
+        # Igniter (igniter-provider solvers only). Only what the user changed
+        # arrives here: a picked library material (deep-copied into the
+        # motor's block, mirroring the grain propellant picker) and the
+        # changed chamber keys. Everything else in motor.igniterData is left
+        # exactly as it was. Empty for solvers without an igniter.
+        libMaterial = None
         if pyrogenName:
             try:
-                libPyro = self.app.pyrogenManager.getPyrogenByName(pyrogenName)
-                cm.igniterPyrogen.setProperties(libPyro.getProperties())
+                libMaterial = self.app.pyrogenManager.getPyrogenByName(pyrogenName)
             except (ValueError, IndexError):
                 pass
-        if igniterProps:
-            cm.igniter.setProperties(igniterProps)
+        if libMaterial is not None or igniterProps:
+            cm.igniterData = motorlib.igniter.merge_edits(
+                cm.igniterData, libMaterial, igniterProps)
         self.app.fileManager.addNewMotorHistory(cm)
         self.updateGrainTable()
 

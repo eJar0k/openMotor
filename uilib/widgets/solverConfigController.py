@@ -11,6 +11,7 @@ without duplicating the logic.
 """
 
 from motorlib import solvers
+from motorlib.igniter import chamber_collection, changed_values
 from motorlib.motor import MotorConfig
 from motorlib.properties import PropertyCollection
 
@@ -48,20 +49,30 @@ class SolverConfigController:
     """
 
     def __init__(self, editor, generalSource, solverConfigsValues,
-                 igniterSource=None):
+                 withIgniter=False, igniterBlock=None):
         self.editor = editor
         self.generalCopy = MotorConfig()
         self.generalCopy.setProperties(generalSource.getProperties())
         self.sharedColl = _subset(self.generalCopy, SHARED_CONFIG_KEYS)
 
-        # Per-motor igniter chamber (srm_1d only): a working copy edited as an
-        # extra section under the igniter-capable solver. None on the global
-        # Preferences screen (igniter is per-motor).
+        # Per-motor igniter chamber (igniter provider only): a working copy,
+        # built from the provider's chamber schema, edited as an extra section
+        # under the igniter-capable solver. None on the global Preferences
+        # screen (igniter is per-motor) or when no provider is registered.
+        # ``igniterBlock`` is the motor's raw ``data.igniter`` dict (None = no
+        # block yet -> the provider's default is shown). D4: only keys the
+        # user changes are reported (``igniterProps``); the rest of the raw
+        # block is never rewritten.
         self.igniterCopy = None
-        if igniterSource is not None:
-            from motorlib.igniter import Igniter
-            self.igniterCopy = Igniter()
-            self.igniterCopy.setProperties(igniterSource.getProperties())
+        self._igniterSnapshot = {}      # collection values right after loading
+        self._widgetBaseline = {}       # widget values right after rendering
+        if withIgniter:
+            provider = solvers.get_igniter_provider()
+            if igniterBlock is None and provider is not None:
+                igniterBlock = provider.get_default_igniter()
+            self.igniterCopy = chamber_collection(igniterBlock)
+            if self.igniterCopy is not None:
+                self._igniterSnapshot = self.igniterCopy.getProperties()
 
         self.specificColls = {}
         self.generalName = solvers.QUASI_STEADY
@@ -108,11 +119,31 @@ class SolverConfigController:
         self.sharedColl.setProperties(values)
         self.specificColls[self.current].setProperties(values)
         if self.usesIgniter(self.current):
-            self.igniterCopy.setProperties(values)
+            # Only widget values that moved since the page was rendered are
+            # edits; the rest keep their exact loaded value (the widgets round
+            # through display units and rounding, which must not leak into
+            # untouched keys).
+            keys = self.igniterCopy.props
+            moved = changed_values(
+                self._widgetBaseline, {k: v for k, v in values.items()
+                                       if k in keys})
+            self.igniterCopy.setProperties(moved)
+
+    def captureWidgetBaseline(self):
+        """Record the igniter-chamber widget values of the freshly rendered
+        page. Call once the page is fully built (after any widget tweaks such
+        as the 'auto' sentinel display)."""
+        if self.igniterCopy is not None and self.current is not None:
+            vals = self.editor.getProperties()
+            self._widgetBaseline = {k: v for k, v in vals.items()
+                                    if k in self.igniterCopy.props}
 
     def igniterProps(self):
-        """The edited igniter-chamber values (or None when no igniter)."""
-        return self.igniterCopy.getProperties() if self.igniterCopy else None
+        """The igniter-chamber values the user changed, vs the loaded block
+        ({} when none / no igniter)."""
+        if self.igniterCopy is None:
+            return {}
+        return changed_values(self._igniterSnapshot, self.igniterCopy)
 
     def extract(self):
         """Return ``(general_dict, solver_configs_dict)`` for persisting."""

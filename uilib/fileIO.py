@@ -5,6 +5,8 @@ from PyQt6.QtWidgets import QApplication
 import yaml
 import platformdirs
 
+from motorlib import solvers
+
 from .defaults import DEFAULT_PREFERENCES, DEFAULT_PROPELLANTS, KNSU_PROPS
 from .logger import logger
 
@@ -18,25 +20,6 @@ TRANSPORT_TAB_KEYS = (
     'mu', 'kThermalFrozen', 'cpFrozen', 'kThermalEffective', 'cpEffective',
 )
 TRANSPORT_UNSET = 0.0
-
-# v0.7.0 default igniter block seeded into motors that predate the igniter
-# concept (BPNV pyrogen + forward_plenum auto-sizing). -1.0 = "auto"
-# sentinel (backend derives mass via Sutton, throat via Kn-design, etc.).
-DEFAULT_IGNITER = {
-    'pyrogen': {
-        'name': 'BPNV', 'a': 2.0e-5, 'n': 0.50, 'rho': 1700.0,
-        'T_flame': 2800.0, 'M': 0.030, 'gamma': 1.25,
-        'impetus_W': 5000.0, 'heat_flux_cal_cm2_s': 69.4,
-        'kappa_jet': 8.0, 'form': 'pellets',
-        'particle_diameter_m': 3.2e-3, 'particle_LD_ratio': 1.0,
-        'heat_delivery_mode': 'demar', 'pellet_emissivity': 0.7,
-        'radiation_absorption_length_m': 1.0,
-    },
-    'mass': -1.0, 'throat_area': -1.0, 'volume': -1.0, 'burn_area': -1.0,
-    'burn_law': '0d', 'injection_topology': 'forward_plenum',
-    'cartridge_length_m': -1.0, 'basket_fill_fraction': 0.5,
-    'pellet_packing_fraction': 0.60,
-}
 
 class fileTypes(Enum):
     PREFERENCES = 1
@@ -115,8 +98,14 @@ def migrateProp_0_6_1_to_0_7_0(data):
 
 def migrateMotor_0_6_1_to_0_7_0(data):
     _seedPropellantTransport(data['propellant'])
-    # v0.7.0 also introduces the igniter block; seed a default if absent.
-    data.setdefault('igniter', DEFAULT_IGNITER)
+    # v0.7.0 also introduces the igniter block; seed the igniter provider's
+    # default if absent. With no provider (no solver plugin consumes an
+    # igniter) no key is added.
+    provider = solvers.get_igniter_provider()
+    if provider is not None and 'igniter' not in data:
+        default = provider.get_default_igniter()
+        if default is not None:
+            data['igniter'] = default
     # v0.8.0 per-motor solver run-config overrides (empty = use global config).
     data.setdefault('solverConfigs', {})
     return data

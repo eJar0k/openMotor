@@ -10,10 +10,12 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QListWidget,
                              QPushButton, QApplication)
 from PyQt6.QtCore import pyqtSignal
 
-import motorlib.igniter
+import copy
+
+from motorlib import solvers
+from motorlib.igniter import material_collection, changed_values
 
 from .collectionEditor import CollectionEditor
-from ..defaults import DEFAULT_PYROGENS
 from ..logger import logger
 
 
@@ -73,6 +75,9 @@ class PyrogenMenu(QDialog):
         self.resize(760, 520)
 
         self.editingPyrogen = False
+        # Widget values right after the editor was rendered (display-unit
+        # rounding included); only keys that differ from it were edited.
+        self._editSnapshot = {}
         self.setupPyroList()
         self.setupButtons()
 
@@ -107,9 +112,13 @@ class PyrogenMenu(QDialog):
             while '{} {}'.format(name, n) in names:
                 n += 1
             name = '{} {}'.format(name, n)
-        newPyro = motorlib.igniter.Pyrogen()
-        newPyro.setProperties(DEFAULT_PYROGENS[0])  # sensible BPNV seed
-        newPyro.setProperty('name', name)
+        provider = solvers.get_igniter_provider()
+        default = provider.get_default_igniter() if provider else None
+        if default is None:
+            logger.warn('No igniter provider: cannot create a pyrogen')
+            return
+        newPyro = copy.deepcopy(default['pyrogen'])  # provider's default seed
+        newPyro['name'] = name
         self.manager.pyrogens.append(newPyro)
         self.manager.savePyrogens()
         self.setupPyroList()
@@ -129,8 +138,12 @@ class PyrogenMenu(QDialog):
         row = self.listWidget.currentRow()
         if row < 0:
             return
-        self.pyroEditor.loadProperties(self.manager.pyrogens[row])
+        collection = material_collection(self.manager.pyrogens[row])
+        if collection is None:      # no igniter provider
+            return
+        self.pyroEditor.loadProperties(collection)
         self._customizePyroFields()
+        self._editSnapshot = self.pyroEditor.getProperties()
         self.toggleButtons(True)
         self.editingPyrogen = True
 
@@ -158,7 +171,10 @@ class PyrogenMenu(QDialog):
         if pyroDict.get('name') in names and names.index(pyroDict['name']) != row:
             logger.warn("Can't duplicate a pyrogen name!")
             del pyroDict['name']
-        self.manager.pyrogens[row].setProperties(pyroDict)
+        # D4: write back ONLY what the user changed; every other key
+        # (including None / out-of-range / schema-unknown ones) is untouched.
+        changes = changed_values(self._editSnapshot, pyroDict)
+        self.manager.pyrogens[row].update(changes)
         self.manager.savePyrogens()
         self.setupPyroList()
 

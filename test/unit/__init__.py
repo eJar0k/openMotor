@@ -4,3 +4,4 @@ from .nozzle import *
 from .propellant import *
 from .grains import *
 from .taper import *
+from .igniter import *
