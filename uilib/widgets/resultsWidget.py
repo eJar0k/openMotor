@@ -8,6 +8,7 @@ from motorlib.constants import standardGravity
 
 from .grainImageWidget import GrainImageWidget
 from .stationSelector import StationSelector
+from .importedDataSelector import ImportedDataSelector
 from .motorSliceWidget import MotorSliceWidget, SliceNavToolbar, SLICE_FIELDS
 
 from ..views.ResultsWidget_ui import Ui_ResultsWidget
@@ -70,6 +71,13 @@ class ResultsWidget(QWidget):
         self.ui.verticalLayout_3.insertWidget(gsIndex + 1, self.stationSelector)
         self.stationSelector.setVisible(False)
         self.stationSelector.checksChanged.connect(self.onSelectorChanged)
+
+        # Imported-data overlay (user CSV). Lives here, not in the sim result,
+        # so it persists across re-simulation until cleared/replaced.
+        self.importedSelector = ImportedDataSelector()
+        yIndex = self.ui.verticalLayout_3.indexOf(self.ui.channelSelectorY)
+        self.ui.verticalLayout_3.insertWidget(yIndex + 1, self.importedSelector)
+        self.importedSelector.checksChanged.connect(self.drawGraphs)
 
         self.ui.horizontalSliderTime.valueChanged.connect(self.updateGrainTab)
         self.ui.tableWidgetGrains.setRowHeight(0, 128)
@@ -261,6 +269,9 @@ class ResultsWidget(QWidget):
         if self.simResult is None:
             return
         xCheck = self.ui.channelSelectorX.getSelectedChannels()[0]
+        imported = None
+        if self.importedSelector.data is not None:
+            imported = (self.importedSelector.data, self.importedSelector.getSelectedColumns())
         yChecks = self.ui.channelSelectorY.getSelectedChannels()
         if self._stationMode:
             # Station mode: the selector picks stations; per-grain channels plot
@@ -270,10 +281,11 @@ class ResultsWidget(QWidget):
             grains = sorted({s['grain'] for s in stations if s['grain'] >= 0})
             self.ui.widgetGraph.showData(self.simResult, xCheck, yChecks, grains,
                                          stations=stations,
-                                         axialFields=self._axialDisplayUnits())
+                                         axialFields=self._axialDisplayUnits(),
+                                         imported=imported)
         else:
             grains = self.ui.grainSelector.getSelectedGrains()
-            self.ui.widgetGraph.showData(self.simResult, xCheck, yChecks, grains)
+            self.ui.widgetGraph.showData(self.simResult, xCheck, yChecks, grains, imported=imported)
 
     def _axialDisplayUnits(self):
         """Resolve display units for the axial fields, honoring the user's

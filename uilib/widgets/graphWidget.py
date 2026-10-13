@@ -28,7 +28,7 @@ class GraphWidget(FigureCanvas):
         self.plot = self.figure.add_subplot(111)
         self.figure.tight_layout()
 
-    def plotData(self, simResult, xChannel, yChannels, grains, stations=None, axialFields=None):
+    def plotData(self, simResult, xChannel, yChannels, grains, stations=None, axialFields=None, imported=None):
         """Plot the selected openMotor channels exactly as before. The only
         srm_1d adaptation: ``yChannels`` may include keys from ``axialFields``
         (carried per-cell fields in ``simResult.srm1d_axial``) — those are
@@ -95,6 +95,23 @@ class GraphWidget(FigureCanvas):
                     suffix = ' - {}'.format(toUnit) if toUnit != '' else ''
                     legend.append('{} - {}{}'.format(label, station['label'], suffix))
 
+        # User-imported CSV columns, overlaid vs time (dashed). Only meaningful
+        # when X is time. ``imported`` is (ImportedData, [selected columns]).
+        if imported is not None and xChannel == 'time' and imported[1]:
+            data, columns = imported
+            t = data.timeSeconds()
+            if data.timeColumn.unitKnown:
+                try:
+                    t = motorlib.units.convert(t, 's', xAxisUnit)
+                except KeyError:
+                    pass
+            for col in columns:
+                displayUnit = self.preferences.getUnit(col.baseUnit) if col.unitKnown else None
+                y, unit = col.converted(displayUnit)
+                self.plot.plot(t, y, linestyle='--')
+                legend.append('Imported: {} - {}'.format(
+                    col.name, unit if unit is not None else '(units unknown)'))
+
         # Legend placement. A few entries → a fixed corner inside (never the
         # jumpy 'best' that lands mid-plot). Many entries (station mode) → move
         # it OUTSIDE on the right in a single small-font column so it neither
@@ -118,8 +135,8 @@ class GraphWidget(FigureCanvas):
         # Clear, but don't draw to not wipe away the graph in the UI
         self.plot.clear()
 
-    def showData(self, simResult, xChannel, yChannels, grains, stations=None, axialFields=None):
-        self.plotData(simResult, xChannel, yChannels, grains, stations, axialFields)
+    def showData(self, simResult, xChannel, yChannels, grains, stations=None, axialFields=None, imported=None):
+        self.plotData(simResult, xChannel, yChannels, grains, stations, axialFields, imported)
         self.draw()
 
     def resetPlot(self):
