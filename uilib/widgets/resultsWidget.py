@@ -215,7 +215,12 @@ class ResultsWidget(QWidget):
         self.drawGraphs()
 
         self.cleanupGrainTab()
-        self.ui.horizontalSliderTime.setMaximum(len(simResult.channels['time'].getData()) - 1)
+        if self._stationMode:
+            # srm_1d station mode: the slider steps through the snapshot frames,
+            # so every slider tick is a new slice frame.
+            self.ui.horizontalSliderTime.setMaximum(len(self._axial['snap_times']) - 1)
+        else:
+            self.ui.horizontalSliderTime.setMaximum(len(simResult.channels['time'].getData()) - 1)
 
         # Per-grain regression maps (by grain id) are built once; station
         # columns reuse them, so toggling stations only rebuilds cheap widgets.
@@ -347,16 +352,18 @@ class ResultsWidget(QWidget):
 
     def updateGrainTab(self):
         if self.simResult is not None:
-            index = self.ui.horizontalSliderTime.value()
-            currentTime = self.simResult.channels['time'].getPoint(index)
-
-            # Drive the longitudinal slice to the snapshot frame nearest the
-            # slider time (slider is on the per-step grid; the slice payload is
-            # on the decimated snapshot grid).
             if self._stationMode and self._axial is not None:
-                snap_t = self._axial['snap_times']
-                frame = int(np.argmin(np.abs(snap_t - currentTime)))
+                # Station mode: the slider value IS the snapshot frame. The
+                # per-step channels below are read at the sample nearest the
+                # frame time.
+                frame = self.ui.horizontalSliderTime.value()
+                currentTime = float(self._axial['snap_times'][frame])
+                times = np.asarray(self.simResult.channels['time'].getData())
+                index = int(np.argmin(np.abs(times - currentTime)))
                 self.motorSliceWidget.setFrame(frame)
+            else:
+                index = self.ui.horizontalSliderTime.value()
+                currentTime = self.simResult.channels['time'].getPoint(index)
             for col, column in enumerate(self._columns):
                 gid = self._columnGrain(column)
                 grain = self.simResult.motor.grains[gid]
