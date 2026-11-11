@@ -88,6 +88,71 @@ class TestImportedOverlay(unittest.TestCase):
             self.assertIsNone(sel.data)
             self.assertEqual(len(w.ui.widgetGraph.plot.lines), nAll - 3)
 
+    def test_saved_image_includes_the_overlay(self):
+        """File > Export > Image File draws the imported curves exactly as the results plot does."""
+        _ensureUi()
+        from types import SimpleNamespace
+        from PyQt6.QtGui import QIcon
+        from uilib.widgets.resultsWidget import ResultsWidget
+        from uilib.preferencesManager import Preferences
+        from uilib.converters.imageExporter import ImageExporter
+        self.app.icon = QIcon()   # the export dialog reads the app icon
+        w = ResultsWidget(None)
+        w.setPreferences(Preferences())
+        w.importedSelector._showError = lambda *_: None
+        simRes = _simResult()
+        w.showData(simRes)
+        manager = SimpleNamespace(
+            simRes=simRes,
+            app=SimpleNamespace(window=SimpleNamespace(ui=SimpleNamespace(resultsWidget=w))))
+        exporter = ImageExporter(manager)
+        graph = w.ui.widgetGraph
+
+        # Record what is on the axes at the moment savefig is called.
+        saved = []
+        realSave = graph.figure.savefig
+
+        def spy(path, *a, **k):
+            ax = graph.plot
+            saved.append(([l.get_linestyle() for l in ax.lines],
+                          [t.get_text() for t in ax.get_legend().get_texts()]))
+            return realSave(path, *a, **k)
+        graph.figure.savefig = spy
+
+        with tempfile.TemporaryDirectory() as d:
+            plain = os.path.join(d, 'plain.png')
+            exporter.doConversion(plain, ['time', ['pressure', 'force'], [0]])
+            self.assertEqual(len(saved[-1][0]), 2)
+            self.assertFalse(any(t.startswith('Imported') for t in saved[-1][1]))
+
+            csv = os.path.join(d, 'good.csv')
+            with open(csv, 'w') as f:
+                f.write('Time (s),Thrust (N),Pressure (psi),Mystery\n0,0,0,1\n1,500,400,2\n2,0,0,3\n')
+            self.assertTrue(w.importedSelector.loadFile(csv))
+            w.drawGraphs()
+            screen = ([l.get_linestyle() for l in graph.plot.lines][-3:],
+                      [t.get_text() for t in graph.plot.get_legend().get_texts()][-3:])
+
+            withOverlay = os.path.join(d, 'overlay.png')
+            exporter.doConversion(withOverlay, ['time', ['pressure', 'force'], [0]])
+            styles, labels = saved[-1]
+            self.assertEqual(len(styles), 5)
+            # the three imported curves are dashed and labelled exactly as on screen
+            self.assertEqual((styles[-3:], labels[-3:]), screen)
+            self.assertEqual(styles[-3:], ['--'] * 3)
+            self.assertTrue(all(t.startswith('Imported: ') for t in labels[-3:]))
+            self.assertNotEqual(os.path.getsize(plain), os.path.getsize(withOverlay))
+
+            # only the columns ticked on screen are exported
+            w.importedSelector.childChecks[2].setChecked(False)
+            exporter.doConversion(os.path.join(d, 'two.png'), ['time', ['pressure', 'force'], [0]])
+            self.assertEqual(len(saved[-1][0]), 4)
+
+            # the on-screen plot is left as it was (savefig clears only after drawing)
+            self.assertEqual(w.importedOverlay()[1], w.importedSelector.getSelectedColumns())
+            exporter.doConversion(os.path.join(d, 'x.png'), ['time', ['pressure'], [0]])
+            self.assertEqual(len(saved[-1][0]), 1 + 2)
+
 
 if __name__ == '__main__':
     unittest.main()

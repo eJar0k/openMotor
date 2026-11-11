@@ -128,8 +128,9 @@ class GraphWidget(FigureCanvas):
         self.plot.set_xlabel('{} - {}'.format(simResult.channels[xChannel].name, xAxisUnit))
         self.plot.grid(True)
 
-    def saveImage(self, simResult, xChannel, yChannels, grains, path):
-        self.plotData(simResult, xChannel, yChannels, grains)
+    def saveImage(self, simResult, xChannel, yChannels, grains, path, imported=None):
+        # ``imported``: the imported-data overlay, drawn exactly as on screen.
+        self.plotData(simResult, xChannel, yChannels, grains, imported=imported)
         self.plot.set_title(simResult.getFullDesignation())
         self.figure.savefig(path, bbox_inches="tight")
         # Clear, but don't draw to not wipe away the graph in the UI

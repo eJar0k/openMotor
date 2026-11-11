@@ -49,8 +49,11 @@ class ImageExporter(Exporter):
 
     def doConversion(self, path, config):
         # TODO: This is ugly and should be refactored. The app should own the grapher.
-        graphWidget = self.manager.app.window.ui.resultsWidget.ui.widgetGraph
-        graphWidget.saveImage(self.manager.simRes, config[0], config[1], config[2], path)
+        resultsWidget = self.manager.app.window.ui.resultsWidget
+        graphWidget = resultsWidget.ui.widgetGraph
+        # The imported-CSV overlay the user sees on the results plot goes into the image too.
+        graphWidget.saveImage(self.manager.simRes, config[0], config[1], config[2], path,
+                              imported=resultsWidget.importedOverlay())
 
     def checkRequirements(self):
         return self.manager.simRes is not None

@@ -265,13 +265,19 @@ class ResultsWidget(QWidget):
             self.motorSliceWidget.setStations(self.stationSelector.getSelectedStations())
         self.drawGraphs()
 
+    def importedOverlay(self):
+        """The imported-data overlay as the graph takes it: ``(ImportedData,
+        [selected columns])``, or None when nothing is loaded. Shared by the
+        on-screen plot and the image export so both draw the same curves."""
+        if self.importedSelector.data is None:
+            return None
+        return (self.importedSelector.data, self.importedSelector.getSelectedColumns())
+
     def drawGraphs(self):
         if self.simResult is None:
             return
         xCheck = self.ui.channelSelectorX.getSelectedChannels()[0]
-        imported = None
-        if self.importedSelector.data is not None:
-            imported = (self.importedSelector.data, self.importedSelector.getSelectedColumns())
+        imported = self.importedOverlay()
         yChecks = self.ui.channelSelectorY.getSelectedChannels()
         if self._stationMode:
             # Station mode: the selector picks stations; per-grain channels plot
